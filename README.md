@@ -1,8 +1,8 @@
 # Mistflame
 
-A self-contained email CRM. Manage contacts, draft and send emails, track
-reply threads, and handle inbound replies. Deployed on Cloudflare Workers via
-[OpenNext](https://opennext.js.org/cloudflare).
+A self-contained email manager built for CRM. Manage contacts, draft and send
+emails, track reply threads, and handle inbound replies. Deployed on Cloudflare
+Workers via [OpenNext](https://opennext.js.org/cloudflare).
 
 ## Stack
 
@@ -66,7 +66,7 @@ No ID needed, R2 bindings reference the bucket by name.
 
 Email routing must be enabled on the domain before any email bindings work.
 
-**Cloudflare Dashboard → your domain → Email → Email Routing → Enable**
+**Cloudflare Dashboard -> your domain -> Email -> Email Routing -> Enable**
 
 Cloudflare will add the required MX records automatically.
 
