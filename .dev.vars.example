@@ -1,0 +1,4 @@
+ORG_NAME=
+SEND_ADDRS=alice@example.com,bob@example.com
+PASSWORD=changeme
+DEV_MODE=true

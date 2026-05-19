@@ -1,0 +1,23 @@
+name = "mistflame-email-receiver"
+main = "index.ts"
+compatibility_date = "2026-04-02"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mistflame-db"
+database_id = "YOUR_D1_DATABASE_ID"
+
+[[send_email]]
+name = "EMAIL_SENDER"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "mistflame-attachments"
+
+[vars]
+ORG_NAME = "Mistflame"
+# Address used as From: when forwarding unknown-sender notifications
+SYSTEM_FROM_ADDR = "system@example.com"
+# Address that receives unknown-sender forwarded emails
+NOTIFICATION_EMAIL = "admin@example.com"

@@ -1,0 +1,43 @@
+main = ".open-next/worker.js"
+name = "mistflame"
+compatibility_date = "2026-04-02"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = ".open-next/assets"
+binding = "ASSETS"
+
+[[services]]
+binding = "WORKER_SELF_REFERENCE"
+service = "mistflame"
+
+[limits]
+cpu_ms = 30000
+
+[observability]
+enabled = true
+
+[[kv_namespaces]]
+binding = "SESSION"
+id = "YOUR_KV_NAMESPACE_ID"
+preview_id = "local-session"
+
+[[send_email]]
+name = "EMAIL_SENDER"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "mistflame-attachments"
+
+[vars]
+ORG_NAME = "Mistflame"
+# Comma-separated list of sender addresses available in the UI
+SEND_ADDRS = "hello@example.com"
+# Session duration in hours
+SESSION_TTL_HOURS = "24"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "mistflame-db"
+database_id = "YOUR_D1_DATABASE_ID"
+preview_database_id = "local-db"
