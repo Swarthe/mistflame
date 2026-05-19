@@ -3,10 +3,6 @@ import PostalMime from 'postal-mime';
 interface Env {
     DB: D1Database;
     ATTACHMENTS: R2Bucket;
-    EMAIL_SENDER: SendEmail;
-    ORG_NAME: string;
-    SYSTEM_FROM_ADDR: string;
-    NOTIFICATION_EMAIL: string;
 }
 
 export default {
@@ -20,36 +16,22 @@ export default {
         const subject = parsed.subject ?? null;
         const body = parsed.text ?? parsed.html ?? '';
 
-        const contact = await env.DB
+        let contact = await env.DB
             .prepare('SELECT id FROM contact WHERE LOWER(email) = ?')
             .bind(fromEmail)
             .first<{ id: number }>();
 
         if (!contact) {
-            const cfEmailMod = await import(('cloudflare' + ':email') as unknown as string);
-            const safeSubject = (subject ?? '(no subject)').replace(/[\r\n]/g, ' ');
-            const bodyNormalised = body.trim().replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
-            const senderName = env.ORG_NAME || 'Mistflame';
-            const raw = [
-                `From: ${senderName} Receiver <${env.SYSTEM_FROM_ADDR}>`,
-                `To: <${env.NOTIFICATION_EMAIL}>`,
-                `Subject: [Unknown sender] ${safeSubject}`,
-                `MIME-Version: 1.0`,
-                `Content-Type: text/plain; charset=UTF-8`,
-                ``,
-                `This email was received by the inbound worker but the sender is not in the contacts database.`,
-                ``,
-                `From:    ${message.from}`,
-                `To:      ${message.to}`,
-                `Subject: ${safeSubject}`,
-                ``,
-                `--- Original message ---`,
-                ``,
-                bodyNormalised,
-            ].join('\r\n');
-            const notification = new cfEmailMod.EmailMessage(env.SYSTEM_FROM_ADDR, env.NOTIFICATION_EMAIL, raw);
-            await env.EMAIL_SENDER.send(notification);
-            return;
+            const contactName = parsed.from?.name?.trim() || fromEmail;
+            await env.DB
+                .prepare('INSERT OR IGNORE INTO contact (name, email) VALUES (?, ?)')
+                .bind(contactName, fromEmail)
+                .run();
+            contact = await env.DB
+                .prepare('SELECT id FROM contact WHERE LOWER(email) = ?')
+                .bind(fromEmail)
+                .first<{ id: number }>();
+            if (!contact) return;
         }
 
         let parentId: number | null = null;

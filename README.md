@@ -110,14 +110,6 @@ changes needed to customise the app for a new deployment.
 | `ORG_NAME` | `"Mistflame"` | Organisation/project name, shown in the UI title as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
 
-### Email receiver worker (`workers/email-receiver/wrangler.toml`)
-
-| Var | Purpose |
-|---|---|
-| `ORG_NAME` | Display name for unknown-sender notification emails |
-| `SYSTEM_FROM_ADDR` | `From:` address used when forwarding unknown-sender emails |
-| `NOTIFICATION_EMAIL` | Destination address for unknown-sender forwarded emails |
-
 ### Bindings
 
 | Binding | Type | Purpose |
@@ -169,7 +161,7 @@ Secrets are never stored in config files.
 - Inbound emails matched to contacts by sender address
 - Reply threading via `In-Reply-To` header matching with a subject-line fallback
 - Attachments stored in R2 and shown in the UI
-- Unknown senders forwarded to `NOTIFICATION_EMAIL` with context
+- Unknown senders auto-created as new contacts (name from display name, email from sender address)
 
 ## Project layout
 

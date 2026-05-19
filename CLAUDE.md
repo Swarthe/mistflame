@@ -18,8 +18,6 @@ All branding and addresses are set via Cloudflare `[vars]` in `wrangler.toml` (n
 | `ORG_NAME` | Organisation/project name — shown in the UI title as "Mistflame - {ORG_NAME}" and used as the display name in email From: headers |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
 | `PASSWORD` | Secret — login password |
-| `SYSTEM_FROM_ADDR` | (email receiver) From: address for unknown-sender notifications |
-| `NOTIFICATION_EMAIL` | (email receiver) Destination for unknown-sender forwarded emails |
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in values.
 
