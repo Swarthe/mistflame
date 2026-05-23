@@ -17,10 +17,7 @@ export async function POST(request: Request) {
     const ttlHours = Math.max(1, parseInt(env.SESSION_TTL_HOURS ?? '24', 10) || 24);
     const COOKIE_MAX_AGE = ttlHours * 60 * 60;
 
-    const enc = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(password));
-    const receivedHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
-    if (receivedHash !== (env.PASSWORD ?? '')) {
+    if (password !== (env.PASSWORD ?? '')) {
         return Response.json({ ok: false, error: 'Incorrect password.' }, { status: 401 });
     }
 

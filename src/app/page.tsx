@@ -56,7 +56,7 @@ const validateCc = (cc: string): string | null => {
     const invalid = cc.split(',').map(a => a.trim()).filter(a => a && !isValidEmail(a));
     return invalid.length > 0 ? `Invalid: ${invalid.join(', ')}` : null;
 };
-const btnPrimary = 'text-sm font-bold px-4 py-2 bg-white/70 text-black hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer font-sans';
+const btnPrimary = 'text-sm font-bold px-4 py-2 bg-white/80 text-black hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer font-sans';
 const btnGhost = 'text-sm px-4 py-2 border border-white/20 text-white/75 hover:text-white hover:border-white/40 transition-colors cursor-pointer font-sans';
 const btnDanger = 'text-xs leading-none text-red-400/60 hover:text-red-400 transition-colors cursor-pointer';
 
@@ -556,7 +556,11 @@ export default function OutreachPage() {
 
     const [config, setConfig] = useState<AppConfig | null>(null);
     const [contacts, setContacts] = useState<Contact[]>([]);
-    const [selectedId, setSelectedId] = useState<number | null>(null);
+    const [selectedId, setSelectedId] = useState<number | null>(() => {
+        if (typeof window === 'undefined') return null;
+        const stored = localStorage.getItem('mf_contact');
+        return stored ? parseInt(stored, 10) : null;
+    });
     const [emails, setEmails] = useState<EmailRecord[]>([]);
     const [loadingContacts, setLoadingContacts] = useState(true);
     const [loadingEmails, setLoadingEmails] = useState(false);
@@ -604,6 +608,10 @@ export default function OutreachPage() {
             .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
             .catch(() => {})
             .finally(() => setLoadingContacts(false));
+        fetch('/api/send-emails')
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
+            .catch(() => setPendingCount(0));
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
@@ -628,6 +636,10 @@ export default function OutreachPage() {
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
                 .catch(() => {});
+            fetch('/api/send-emails')
+                .then(r => r.ok ? r.json() : Promise.reject())
+                .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
+                .catch(() => {});
         };
         const interval = setInterval(poll, 10_000);
         document.addEventListener('visibilitychange', poll);
@@ -637,11 +649,18 @@ export default function OutreachPage() {
         };
     }, [selectedId, setEmails, setContacts]);
 
+    useEffect(() => {
+        if (selectedId === null) localStorage.removeItem('mf_contact');
+        else localStorage.setItem('mf_contact', String(selectedId));
+    }, [selectedId]);
+
     const selectContact = (id: number) => {
         if (addingContact && (addContactForm.name || addContactForm.email || addContactForm.description)) {
             if (!confirm('Discard new contact?')) return;
         } else if (editContact) {
             if (!confirm('Discard unsaved changes?')) return;
+        } else if (addingEmail || replyToEmail) {
+            if (!confirm('Discard unsaved email?')) return;
         }
         setSelectedId(id);
         setAddingContact(false);
@@ -657,17 +676,17 @@ export default function OutreachPage() {
         router.push('/login');
     };
 
-    const openSendModal = async () => {
+    const refreshPendingCount = () => {
+        fetch('/api/send-emails')
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
+            .catch(() => {});
+    };
+
+    const openSendModal = () => {
         setShowSendModal(true);
         setSendResult(null);
-        setPendingCount(null);
-        try {
-            const res = await fetch('/api/send-emails');
-            const data = (await res.json()) as { count?: number };
-            setPendingCount(data.count ?? 0);
-        } catch {
-            setPendingCount(0);
-        }
+        refreshPendingCount();
     };
 
     const sendEmails = async () => {
@@ -680,6 +699,7 @@ export default function OutreachPage() {
             });
             const data = (await res.json()) as { sent?: number; failed?: number; errors?: string[] };
             setSendResult({ sent: data.sent ?? 0, failed: data.failed ?? 0, errors: data.errors ?? [] });
+            refreshPendingCount();
             fetch('/api/contacts')
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
@@ -789,6 +809,7 @@ export default function OutreachPage() {
                 setEmails(prev => [...prev, { ...data.email!, attachments: uploadedAttachments }]);
                 setAddingEmail(false);
                 setReplyToEmail(null);
+                refreshPendingCount();
                 fetch('/api/contacts')
                     .then(r => r.ok ? r.json() : Promise.reject())
                     .then((d: unknown) => setContacts(((d as { contacts?: Contact[] }).contacts) ?? []))
@@ -832,6 +853,7 @@ export default function OutreachPage() {
             body: JSON.stringify({ email_id: emailId }),
         });
         if (res.ok) {
+            refreshPendingCount();
             if (selectedId !== null) {
                 fetch(`/api/contacts/${selectedId}/emails`)
                     .then(r => r.ok ? r.json() : Promise.reject())
@@ -888,6 +910,7 @@ export default function OutreachPage() {
             } else {
                 setEmails(prev => prev.filter(e => e.id !== id));
             }
+            refreshPendingCount();
             fetch('/api/contacts')
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
@@ -928,8 +951,8 @@ export default function OutreachPage() {
                     {config?.orgName && <><span className="text-white/30 mx-1.5">—</span><span className="text-white">{config.orgName}</span></>}
                 </h1>
                 <div className="flex items-center gap-3">
-                    <button onClick={openSendModal} className="text-sm text-[#ffd54f]/70 hover:text-[#ffd54f] border border-[#ffd54f]/25 hover:border-[#ffd54f]/55 px-4 py-1.5 transition-colors cursor-pointer font-sans">
-                        Send emails
+                    <button onClick={openSendModal} disabled={pendingCount === 0} className={`text-sm border px-4 py-1.5 transition-colors font-sans ${pendingCount === 0 ? 'text-[#ffd54f]/30 border-[#ffd54f]/10 cursor-not-allowed' : 'text-[#ffd54f]/70 hover:text-[#ffd54f] border-[#ffd54f]/25 hover:border-[#ffd54f]/55 cursor-pointer'}`}>
+                        Send emails{pendingCount ? ` (${pendingCount})` : ''}
                     </button>
                     <button onClick={logout} className="text-sm text-white/55 hover:text-white/85 border border-white/20 hover:border-white/40 px-4 py-1.5 transition-colors cursor-pointer font-sans">
                         Log out
@@ -1023,7 +1046,7 @@ export default function OutreachPage() {
                 <main className="flex-1 overflow-y-auto p-6 min-w-0">
                     {addingContact && (
                         <section className="mb-8">
-                            <h2 className="font-heading-bold text-lg text-white mb-4">New Contact</h2>
+                            <h2 className="font-heading-bold text-lg tracking-wide text-white mb-4">New Contact</h2>
                             <ContactForm
                                 value={addContactForm}
                                 onChange={v => { setAddContactForm(v); setContactSaveError(null); }}
@@ -1040,7 +1063,7 @@ export default function OutreachPage() {
                             <section className="mb-6 pb-6 border-b border-white/20">
                                 {editContact ? (
                                     <>
-                                        <h2 className="font-heading-bold text-lg text-white mb-4">Edit Contact</h2>
+                                        <h2 className="font-heading-bold text-lg tracking-wide text-white mb-4">Edit Contact</h2>
                                         <ContactForm
                                             value={editContact}
                                             onChange={v => { setEditContact(v); setContactSaveError(null); }}
@@ -1054,7 +1077,7 @@ export default function OutreachPage() {
                                     <div className="flex flex-col gap-3">
                                         <div className="flex items-start justify-between gap-4">
                                             <div className="min-w-0">
-                                                <h2 className="font-heading-bold text-xl text-white">{selectedContact.name}</h2>
+                                                <h2 className="font-heading-bold text-xl tracking-wide text-white">{selectedContact.name}</h2>
                                                 <div className="flex flex-wrap items-center gap-3 mt-1">
                                                     <a
                                                         href={`mailto:${selectedContact.email}`}
@@ -1190,7 +1213,7 @@ export default function OutreachPage() {
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
                     <div className="bg-[#111] border border-white/15 p-6 w-full max-w-md mx-4 flex flex-col gap-5">
                         <div>
-                            <h2 className="font-heading-bold text-lg text-white mb-1">Send all emails</h2>
+                            <h2 className="font-heading-bold text-lg tracking-wide text-white mb-1">Send all emails</h2>
                             <p className="text-sm text-white/55 font-sans">
                                 {sendResult
                                     ? null
