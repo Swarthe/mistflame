@@ -622,6 +622,7 @@ export default function OutreachPage() {
 
     useEffect(() => {
         if (selectedId === null) { setEmails([]); return; }
+        setEmails([]);
         setLoadingEmails(true);
         apiFetch(`/api/contacts/${selectedId}/emails`)
             .then(r => r.ok ? r.json() : Promise.reject())
@@ -1146,7 +1147,7 @@ export default function OutreachPage() {
                                 {!loadingEmails && emails.length === 0 && !addingEmail && (
                                     <p className="text-sm text-white/55 text-center py-6 font-sans">No emails on record</p>
                                 )}
-                                <div className={`flex flex-col gap-4 transition-opacity duration-150 ${loadingEmails ? 'opacity-40' : 'opacity-100'}`}>
+                                <div className="flex flex-col gap-4">
                                     {threadGroups.map(([threadId, threadEmails], groupIdx) => {
                                         const threadSender = threadEmails.find(e => e.sender !== null)?.sender ?? null;
                                         const outgoingInThread = threadEmails.filter(e => e.sender !== null);
