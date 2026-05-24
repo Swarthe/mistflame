@@ -7,9 +7,22 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
     const { env } = await getCloudflareContext({ async: true });
     const { results: emails } = await env.DB
-        .prepare('SELECT * FROM email WHERE contact_id = ? ORDER BY sent_at ASC NULLS LAST')
+        .prepare(`
+            WITH RECURSIVE ancestry AS (
+                SELECT id, id AS root_id FROM email WHERE parent_id IS NULL AND contact_id = ?
+                UNION ALL
+                SELECT e.id, a.root_id FROM email e JOIN ancestry a ON e.parent_id = a.id
+            ),
+            ranked AS (
+                SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
+            )
+            SELECT e.id, e.contact_id, e.parent_id, e.sender, e.sent_at, e.subject,
+                   e.body, e.message_id, e.recipient, e.cc, r.thread_id
+            FROM email e JOIN ranked r ON e.id = r.id
+            ORDER BY e.sent_at ASC NULLS LAST
+        `)
         .bind(contactId)
-        .all<{ id: number }>();
+        .all<{ id: number; thread_id: number }>();
 
     const { results: attachments } = await env.DB
         .prepare('SELECT id, email_id, file_name AS filename, content_type, size FROM attachment WHERE email_id IN (SELECT id FROM email WHERE contact_id = ?)')
@@ -61,38 +74,44 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             }
         }
 
-        let thread_id: number;
-
         if (parent_id !== null) {
-            const parentRow = await env.DB
-                .prepare('SELECT thread_id FROM email WHERE id = ? AND contact_id = ?')
+            const exists = await env.DB
+                .prepare('SELECT 1 FROM email WHERE id = ? AND contact_id = ?')
                 .bind(parent_id, contactId)
-                .first<{ thread_id: number }>();
-            if (!parentRow) {
+                .first();
+            if (!exists) {
                 return Response.json({ ok: false, error: 'Parent email not found.' }, { status: 404 });
             }
-            thread_id = parentRow.thread_id;
-        } else {
-            const threadRow = await env.DB
-                .prepare('SELECT COALESCE(MAX(thread_id), 0) + 1 AS next_thread FROM email WHERE contact_id = ?')
-                .bind(contactId)
-                .first<{ next_thread: number }>();
-            thread_id = threadRow?.next_thread ?? 1;
         }
 
         const result = await env.DB
-            .prepare('INSERT INTO email (contact_id, thread_id, parent_id, sender, subject, body, cc) VALUES (?, ?, ?, ?, ?, ?, ?)')
-            .bind(contactId, thread_id, parent_id, sender, subject, emailBody.trim(), cc)
+            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, cc) VALUES (?, ?, ?, ?, ?, ?)')
+            .bind(contactId, parent_id, sender, subject, emailBody.trim(), cc)
             .run();
 
         const emailId = result.meta.last_row_id;
+
+        const threadRow = await env.DB
+            .prepare(`
+                WITH RECURSIVE ancestry AS (
+                    SELECT id, id AS root_id FROM email WHERE parent_id IS NULL AND contact_id = ?
+                    UNION ALL
+                    SELECT e.id, a.root_id FROM email e JOIN ancestry a ON e.parent_id = a.id
+                ),
+                ranked AS (
+                    SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
+                )
+                SELECT thread_id FROM ranked WHERE id = ?
+            `)
+            .bind(contactId, emailId)
+            .first<{ thread_id: number }>();
 
         return Response.json({
             ok: true,
             email: {
                 id: emailId,
                 contact_id: contactId,
-                thread_id,
+                thread_id: threadRow?.thread_id ?? 1,
                 parent_id,
                 sender,
                 sent_at: null,

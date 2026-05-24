@@ -935,10 +935,7 @@ export default function OutreachPage() {
             .sort((a, b) => (a[1][0].sent_at ?? '9999').localeCompare(b[1][0].sent_at ?? '9999'));
     }, [emails]);
 
-    const nextThreadId = useMemo(
-        () => emails.reduce((max, e) => Math.max(max, e.thread_id), 0) + 1,
-        [emails],
-    );
+    const nextThreadId = useMemo(() => threadGroups.length + 1, [threadGroups]);
 
     const composeRef = useRef<HTMLDivElement>(null);
     useEffect(() => {

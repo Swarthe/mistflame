@@ -43,8 +43,8 @@ The `email` table uses two columns to encode email state — get these wrong and
 | address string | `NULL` | Outgoing draft — composed but not yet sent |
 | address string | timestamp | Outgoing sent |
 
-- `thread_id` is **per-contact**, not global. New threads get `MAX(thread_id) + 1` scoped to that contact's emails.
-- `awaiting_reply` on the contact is **computed** in the SQL query (not a stored column). It is true when the latest email in any thread for that contact is inbound (`sender IS NULL`).
+- There is no stored `thread_id` column. Thread grouping is computed at query time via a recursive CTE over `parent_id`: each email walks up to its root (`parent_id IS NULL`), and threads are numbered with `DENSE_RANK() OVER (ORDER BY root_id)`. The client still receives a `thread_id` field — it is computed, not stored.
+- `awaiting_reply` on the contact is **computed** in the SQL query (not a stored column). It is true when any inbound email (`sender IS NULL`) for that contact has no child replies.
 - The email receiver backfills `message_id` on a sent email when a reply arrives (using the inbound `In-Reply-To` header), so that subsequent replies thread correctly via `In-Reply-To` matching.
 
 ## Email worker

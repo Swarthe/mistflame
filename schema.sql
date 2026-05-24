@@ -24,9 +24,7 @@ CREATE TABLE contact_tag (
 CREATE TABLE email (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     contact_id     INTEGER NOT NULL,
-    -- thread_id is scoped per contact (not global); new threads get MAX(thread_id)+1 for that contact.
-    thread_id      INTEGER NOT NULL,
-    parent_id      INTEGER,          -- NULL = thread root
+    parent_id      INTEGER,          -- NULL = thread root; thread grouping is derived via recursive CTE
     -- sender IS NULL means inbound from the contact.
     -- sender = address string means outgoing from Mistflame (that address was used to send).
     sender         TEXT,

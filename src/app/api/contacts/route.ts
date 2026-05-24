@@ -23,8 +23,8 @@ const CONTACTS_QUERY = `
         EXISTS (
             SELECT 1 FROM email e
             WHERE e.contact_id = c.id
-              AND e.id = (SELECT MAX(id) FROM email e2 WHERE e2.contact_id = c.id AND e2.thread_id = e.thread_id)
               AND e.sender IS NULL
+              AND NOT EXISTS (SELECT 1 FROM email child WHERE child.parent_id = e.id)
         ) AS awaiting_reply
     FROM contact c
     ORDER BY name
