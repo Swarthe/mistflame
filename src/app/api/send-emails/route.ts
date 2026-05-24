@@ -80,7 +80,12 @@ function buildRaw(
 export async function GET() {
     const { env } = await getCloudflareContext({ async: true });
     const row = await env.DB
-        .prepare("SELECT COUNT(*) AS count FROM email WHERE sender IS NOT NULL AND sent_at IS NULL")
+        .prepare(`
+            SELECT COUNT(*) AS count FROM email e
+            LEFT JOIN email p ON p.id = e.parent_id
+            WHERE e.sender IS NOT NULL AND e.sent_at IS NULL
+              AND (e.parent_id IS NULL OR p.sent_at IS NOT NULL)
+        `)
         .first<{ count: number }>();
     return Response.json({ ok: true, count: row?.count ?? 0 });
 }

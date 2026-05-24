@@ -33,10 +33,11 @@ export async function GET(
     }
 
     const safeName = encodeURIComponent(row.file_name);
+    const escapedName = row.file_name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     return new Response(obj.body, {
         headers: {
             'Content-Type': row.content_type,
-            'Content-Disposition': `attachment; filename="${row.file_name}"; filename*=UTF-8''${safeName}`,
+            'Content-Disposition': `attachment; filename="${escapedName}"; filename*=UTF-8''${safeName}`,
             'Content-Length': String(obj.size),
         },
     });

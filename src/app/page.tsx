@@ -240,7 +240,7 @@ function AttachmentChip({ att, href, onDelete }: {
     );
 }
 
-function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, threadSender, senderEditable, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete }: {
+function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, threadSender, senderEditable, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
     email: EmailRecord;
     contactName: string;
     parentEmail?: EmailRecord | null;
@@ -254,9 +254,11 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
     onSend: () => Promise<void>;
     onAttachmentUpload: (file: File) => Promise<void>;
     onAttachmentDelete: (attachmentId: number) => Promise<void>;
+    onEditingChange: (editing: boolean) => void;
 }) {
     const isUs = email.sender !== null;
     const [editing, setEditing] = useState(false);
+    useEffect(() => { onEditingChange(editing); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
     const [editSenderType, setEditSenderType] = useState<'mistflame' | 'contact'>(isUs ? 'mistflame' : 'contact');
     const [editSenderAddr, setEditSenderAddr] = useState(email.sender ?? sendAddrs[0] ?? '');
     const [editSubject, setEditSubject] = useState(email.subject ?? '');
@@ -576,6 +578,7 @@ export default function OutreachPage() {
 
     const [addingEmail, setAddingEmail] = useState(false);
     const [replyToEmail, setReplyToEmail] = useState<EmailRecord | null>(null);
+    const [editingEmailId, setEditingEmailId] = useState<number | null>(null);
 
     const [showSendModal, setShowSendModal] = useState(false);
     const [sendingEmails, setSendingEmails] = useState(false);
@@ -585,13 +588,14 @@ export default function OutreachPage() {
     const selectedContact = contacts.find(c => c.id === selectedId) ?? null;
     const senderName = config?.orgName || 'Mistflame';
     const sendAddrs = config?.sendAddrs ?? [];
+    const searchTrimmed = searchQuery.trim();
     const filteredContacts = contacts.filter(c => {
         if (filterAwaiting && !c.awaiting_reply) return false;
-        if (!searchQuery.trim()) return true;
+        if (!searchTrimmed) return true;
         return (
-            fuzzyMatch(searchQuery.trim(), c.name) ||
-            fuzzyMatch(searchQuery.trim(), c.email) ||
-            c.tags.some(t => fuzzyMatch(searchQuery.trim(), t.name))
+            fuzzyMatch(searchTrimmed, c.name) ||
+            fuzzyMatch(searchTrimmed, c.email) ||
+            c.tags.some(t => fuzzyMatch(searchTrimmed, t.name))
         );
     });
 
@@ -632,10 +636,7 @@ export default function OutreachPage() {
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
                 .catch(() => {});
-            fetch('/api/contacts')
-                .then(r => r.ok ? r.json() : Promise.reject())
-                .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-                .catch(() => {});
+            refreshContacts();
             fetch('/api/send-emails')
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
@@ -647,7 +648,7 @@ export default function OutreachPage() {
             clearInterval(interval);
             document.removeEventListener('visibilitychange', poll);
         };
-    }, [selectedId, setEmails, setContacts]);
+    }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (selectedId === null) localStorage.removeItem('mf_contact');
@@ -661,6 +662,8 @@ export default function OutreachPage() {
             if (!confirm('Discard unsaved changes?')) return;
         } else if (addingEmail || replyToEmail) {
             if (!confirm('Discard unsaved email?')) return;
+        } else if (editingEmailId !== null) {
+            if (!confirm('Discard unsaved email edits?')) return;
         }
         setSelectedId(id);
         setAddingContact(false);
@@ -669,11 +672,20 @@ export default function OutreachPage() {
         setContactSaveError(null);
         setAddingEmail(false);
         setReplyToEmail(null);
+        setEditingEmailId(null);
+        setApiError(null);
     };
 
     const logout = async () => {
         await fetch('/api/auth', { method: 'DELETE' });
         router.push('/login');
+    };
+
+    const refreshContacts = () => {
+        fetch('/api/contacts')
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
+            .catch(() => {});
     };
 
     const refreshPendingCount = () => {
@@ -700,10 +712,7 @@ export default function OutreachPage() {
             const data = (await res.json()) as { sent?: number; failed?: number; errors?: string[] };
             setSendResult({ sent: data.sent ?? 0, failed: data.failed ?? 0, errors: data.errors ?? [] });
             refreshPendingCount();
-            fetch('/api/contacts')
-                .then(r => r.ok ? r.json() : Promise.reject())
-                .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-                .catch(() => {});
+            refreshContacts();
         } catch {
             setSendResult({ sent: 0, failed: 0, errors: ['Network error — could not reach the server.'] });
         } finally {
@@ -746,10 +755,7 @@ export default function OutreachPage() {
             if (res.ok) {
                 setEditContact(null);
                 setContactSaveError(null);
-                fetch('/api/contacts')
-                    .then(r => r.ok ? r.json() : Promise.reject())
-                    .then((d: unknown) => setContacts(((d as { contacts?: Contact[] }).contacts) ?? []))
-                    .catch(() => {});
+                refreshContacts();
             } else {
                 setContactSaveError(data.error ?? 'Failed to save contact.');
             }
@@ -766,11 +772,13 @@ export default function OutreachPage() {
     };
 
     const startAddEmail = () => {
+        if (addingEmail && !confirm('Discard unsaved email?')) return;
         setReplyToEmail(null);
         setAddingEmail(true);
     };
 
     const startReply = (email: EmailRecord) => {
+        if (addingEmail && !confirm('Discard unsaved email?')) return;
         setReplyToEmail(email);
         setAddingEmail(true);
     };
@@ -810,10 +818,11 @@ export default function OutreachPage() {
                 setAddingEmail(false);
                 setReplyToEmail(null);
                 refreshPendingCount();
-                fetch('/api/contacts')
-                    .then(r => r.ok ? r.json() : Promise.reject())
-                    .then((d: unknown) => setContacts(((d as { contacts?: Contact[] }).contacts) ?? []))
-                    .catch(() => {});
+                refreshContacts();
+                const failedUploads = files.length - uploadedAttachments.length;
+                if (failedUploads > 0) {
+                    setApiError(`Email saved, but ${failedUploads} attachment${failedUploads > 1 ? 's' : ''} failed to upload.`);
+                }
             } else {
                 setApiError(data.error ?? `Server error (${res.status})`);
             }
@@ -860,10 +869,7 @@ export default function OutreachPage() {
                     .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
                     .catch(() => {});
             }
-            fetch('/api/contacts')
-                .then(r => r.ok ? r.json() : Promise.reject())
-                .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-                .catch(() => {});
+            refreshContacts();
         } else {
             const data = (await res.json()) as { error?: string };
             throw new Error(data.error ?? 'Failed to send');
@@ -911,10 +917,7 @@ export default function OutreachPage() {
                 setEmails(prev => prev.filter(e => e.id !== id));
             }
             refreshPendingCount();
-            fetch('/api/contacts')
-                .then(r => r.ok ? r.json() : Promise.reject())
-                .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-                .catch(() => {});
+            refreshContacts();
         }
     };
 
@@ -978,7 +981,21 @@ export default function OutreachPage() {
                         )}
                         <span className="flex-1" />
                         <button
-                            onClick={() => { setAddingContact(true); setSelectedId(null); setEditContact(null); setAddingEmail(false); }}
+                            onClick={() => {
+                            if (addingContact && (addContactForm.name || addContactForm.email || addContactForm.description) && !confirm('Discard new contact?')) return;
+                            if (editContact && !confirm('Discard unsaved changes?')) return;
+                            if ((addingEmail || replyToEmail) && !confirm('Discard unsaved email?')) return;
+                            if (editingEmailId !== null && !confirm('Discard unsaved email edits?')) return;
+                            setAddingContact(true);
+                            setSelectedId(null);
+                            setEditContact(null);
+                            setAddContactForm({});
+                            setContactSaveError(null);
+                            setAddingEmail(false);
+                            setReplyToEmail(null);
+                            setEditingEmailId(null);
+                            setApiError(null);
+                        }}
                             className="text-sm text-[#ffd54f]/60 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans"
                         >
                             + New
@@ -1158,6 +1175,7 @@ export default function OutreachPage() {
                                                         onSend={() => sendSingleEmail(email.id)}
                                                         onAttachmentUpload={(file) => uploadAttachment(email.id, file)}
                                                         onAttachmentDelete={(attId) => deleteAttachment(email.id, attId)}
+                                                        onEditingChange={(ed) => setEditingEmailId(ed ? email.id : null)}
                                                     />
                                                 ))}
                                                 {addingEmail && replyToEmail?.thread_id === threadId && (
