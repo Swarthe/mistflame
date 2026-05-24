@@ -107,8 +107,9 @@ changes needed to customise the app for a new deployment.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `ORG_NAME` | `"Mistflame"` | Organisation/project name, shown in the UI title as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers |
+| `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame — {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
+| `SESSION_TTL_HOURS` | `"24"` | Session token lifetime in hours |
 
 ### Bindings
 
@@ -132,6 +133,8 @@ Secrets are never stored in config files.
 - Session cookie is `HttpOnly; Secure; SameSite=Strict`
 - All routes are protected by middleware; unauthenticated API requests get a
   401, page requests redirect to `/login`
+- If a session expires mid-use, the next API call returns 401 and the UI
+  automatically redirects to `/login`
 - If `PASSWORD` is unset, login is blocked for everyone (fails closed)
 - **Recommended:** add a Cloudflare WAF rate limiting rule on all `/api/*` paths
   to prevent brute force:

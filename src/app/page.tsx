@@ -555,6 +555,8 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
 
 export default function OutreachPage() {
     const router = useRouter();
+    const apiFetch = (...args: Parameters<typeof fetch>): Promise<Response> =>
+        fetch(...args).then(res => { if (res.status === 401) router.push('/login'); return res; });
 
     const [config, setConfig] = useState<AppConfig | null>(null);
     const [contacts, setContacts] = useState<Contact[]>([]);
@@ -600,19 +602,19 @@ export default function OutreachPage() {
     });
 
     useEffect(() => {
-        fetch('/api/config')
+        apiFetch('/api/config')
             .then(r => r.json())
             .then((data: unknown) => {
                 const cfg = data as AppConfig;
                 setConfig(cfg);
             })
             .catch(() => {});
-        fetch('/api/contacts')
+        apiFetch('/api/contacts')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
             .catch(() => {})
             .finally(() => setLoadingContacts(false));
-        fetch('/api/send-emails')
+        apiFetch('/api/send-emails')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
             .catch(() => setPendingCount(0));
@@ -621,7 +623,7 @@ export default function OutreachPage() {
     useEffect(() => {
         if (selectedId === null) { setEmails([]); return; }
         setLoadingEmails(true);
-        fetch(`/api/contacts/${selectedId}/emails`)
+        apiFetch(`/api/contacts/${selectedId}/emails`)
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
             .catch(() => {})
@@ -632,12 +634,12 @@ export default function OutreachPage() {
         if (selectedId === null) return;
         const poll = () => {
             if (document.visibilityState !== 'visible') return;
-            fetch(`/api/contacts/${selectedId}/emails`)
+            apiFetch(`/api/contacts/${selectedId}/emails`)
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
                 .catch(() => {});
             refreshContacts();
-            fetch('/api/send-emails')
+            apiFetch('/api/send-emails')
                 .then(r => r.ok ? r.json() : Promise.reject())
                 .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
                 .catch(() => {});
@@ -682,14 +684,14 @@ export default function OutreachPage() {
     };
 
     const refreshContacts = () => {
-        fetch('/api/contacts')
+        apiFetch('/api/contacts')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
             .catch(() => {});
     };
 
     const refreshPendingCount = () => {
-        fetch('/api/send-emails')
+        apiFetch('/api/send-emails')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
             .catch(() => {});
@@ -704,7 +706,7 @@ export default function OutreachPage() {
     const sendEmails = async () => {
         setSendingEmails(true);
         try {
-            const res = await fetch('/api/send-emails', {
+            const res = await apiFetch('/api/send-emails', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({}),
@@ -724,7 +726,7 @@ export default function OutreachPage() {
         setSaving(true);
         setContactSaveError(null);
         try {
-            const res = await fetch('/api/contacts', {
+            const res = await apiFetch('/api/contacts', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(addContactForm),
@@ -746,7 +748,7 @@ export default function OutreachPage() {
         setSaving(true);
         setContactSaveError(null);
         try {
-            const res = await fetch(`/api/contacts/${editContact.id}`, {
+            const res = await apiFetch(`/api/contacts/${editContact.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(editContact),
@@ -764,7 +766,7 @@ export default function OutreachPage() {
 
     const deleteContact = async (id: number) => {
         if (!confirm('Delete this contact and all their emails?')) return;
-        const res = await fetch(`/api/contacts/${id}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/contacts/${id}`, { method: 'DELETE' });
         if (res.ok) {
             setContacts(prev => prev.filter(c => c.id !== id));
             if (selectedId === id) setSelectedId(null);
@@ -795,7 +797,7 @@ export default function OutreachPage() {
                 cc: cc.trim() || null,
                 parent_id: replyToEmail?.id ?? null,
             };
-            const res = await fetch(`/api/contacts/${selectedId}/emails`, {
+            const res = await apiFetch(`/api/contacts/${selectedId}/emails`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload),
@@ -807,7 +809,7 @@ export default function OutreachPage() {
                 for (const file of files) {
                     const formData = new FormData();
                     formData.append('file', file);
-                    const attRes = await fetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments`, {
+                    const attRes = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments`, {
                         method: 'POST',
                         body: formData,
                     });
@@ -834,7 +836,7 @@ export default function OutreachPage() {
     const uploadAttachment = async (emailId: number, file: File) => {
         const formData = new FormData();
         formData.append('file', file);
-        const res = await fetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments`, {
+        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments`, {
             method: 'POST',
             body: formData,
         });
@@ -847,7 +849,7 @@ export default function OutreachPage() {
     };
 
     const deleteAttachment = async (emailId: number, attachmentId: number) => {
-        const res = await fetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments/${attachmentId}`, {
+        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments/${attachmentId}`, {
             method: 'DELETE',
         });
         if (res.ok) {
@@ -856,7 +858,7 @@ export default function OutreachPage() {
     };
 
     const sendSingleEmail = async (emailId: number) => {
-        const res = await fetch('/api/send-emails', {
+        const res = await apiFetch('/api/send-emails', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email_id: emailId }),
@@ -864,7 +866,7 @@ export default function OutreachPage() {
         if (res.ok) {
             refreshPendingCount();
             if (selectedId !== null) {
-                fetch(`/api/contacts/${selectedId}/emails`)
+                apiFetch(`/api/contacts/${selectedId}/emails`)
                     .then(r => r.ok ? r.json() : Promise.reject())
                     .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
                     .catch(() => {});
@@ -877,7 +879,7 @@ export default function OutreachPage() {
     };
 
     const editEmail = async (emailId: number, sender: string | null, subject: string, body: string, cc: string) => {
-        const res = await fetch(`/api/contacts/${selectedId}/emails/${emailId}`, {
+        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sender, subject: subject.trim() || null, body, cc: cc.trim() || null }),
@@ -903,12 +905,12 @@ export default function OutreachPage() {
 
     const deleteEmail = async (id: number) => {
         if (!confirm('Delete this email and all its replies?')) return;
-        const res = await fetch(`/api/contacts/${selectedId}/emails/${id}`, { method: 'DELETE' });
+        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${id}`, { method: 'DELETE' });
         if (res.ok) {
             const data = (await res.json()) as { deleted?: number };
             if ((data.deleted ?? 1) > 1) {
                 if (selectedId !== null) {
-                    fetch(`/api/contacts/${selectedId}/emails`)
+                    apiFetch(`/api/contacts/${selectedId}/emails`)
                         .then(r => r.ok ? r.json() : Promise.reject())
                         .then((d: unknown) => setEmails(((d as { emails?: EmailRecord[] }).emails) ?? []))
                         .catch(() => {});

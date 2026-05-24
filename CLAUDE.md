@@ -15,8 +15,9 @@ All branding and addresses are set via Cloudflare `[vars]` in `wrangler.toml` (n
 
 | Var | Purpose |
 |---|---|
-| `ORG_NAME` | Organisation/project name — shown in the UI title as "Mistflame - {ORG_NAME}" and used as the display name in email From: headers |
+| `ORG_NAME` | Organisation/project name — when set, shown in the UI as "Mistflame — {ORG_NAME}" and used as the display name in email From: headers; defaults to empty (shows "Mistflame" only) |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
+| `SESSION_TTL_HOURS` | Session token lifetime in hours (default `24`) |
 | `PASSWORD` | Secret — login password |
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in values.
@@ -33,15 +34,26 @@ For local development, copy `.dev.vars.example` to `.dev.vars` and fill in value
 - D1 (SQLite). FK constraints declared in `schema.sql` but **not enforced at runtime** — cascading deletes are done manually in route handlers.
 - Schema changes: `npx wrangler d1 execute mistflame-db --remote --file <file>`
 
+## Email data model
+The `email` table uses two columns to encode email state — get these wrong and everything breaks:
+
+| `sender` | `sent_at` | Meaning |
+|---|---|---|
+| `NULL` | timestamp | Inbound — received from the contact |
+| address string | `NULL` | Outgoing draft — composed but not yet sent |
+| address string | timestamp | Outgoing sent |
+
+- `thread_id` is **per-contact**, not global. New threads get `MAX(thread_id) + 1` scoped to that contact's emails.
+- `awaiting_reply` on the contact is **computed** in the SQL query (not a stored column). It is true when the latest email in any thread for that contact is inbound (`sender IS NULL`).
+- The email receiver backfills `message_id` on a sent email when a reply arrives (using the inbound `In-Reply-To` header), so that subsequent replies thread correctly via `In-Reply-To` matching.
+
 ## Email worker
 - The email receiver (`workers/email-receiver/index.ts`) is a **separate worker** with its own `wrangler.toml`. `npm run deploy` does not redeploy it.
 - Deploy: `npx wrangler deploy --config workers/email-receiver/wrangler.toml`
 
 ## Shared constants
-- `isValidEmail` is defined and exported from `src/app/api/contacts/route.ts`. Import from there; do not redefine locally.
+- `isValidEmail` is exported from `src/app/api/contacts/route.ts` for server-side use. It is also defined inline in `page.tsx` for client-side use — this duplication is intentional (different environments); do not consolidate.
 - `SEND_ADDRS` is **not** a shared constant — it comes from `env.SEND_ADDRS` at runtime (server) or `/api/config` (client).
 
-## Conventions
-- No comments unless the WHY is non-obvious.
-- No trailing summaries in responses — the user reads the diff.
-- Never commit without explicit instruction.
+## Client fetch pattern
+All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined inside `OutreachPage`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).
