@@ -32,7 +32,7 @@ For local development, copy `.dev.vars.example` to `.dev.vars` and fill in value
 
 ## Database
 - D1 (SQLite). FK constraints declared in `schema.sql` but **not enforced at runtime** — cascading deletes are done manually in route handlers.
-- Schema changes: `npx wrangler d1 execute mistflame-db --remote --file <file>`
+- Schema changes: `npx wrangler d1 execute mistflame-db --remote --file <file>` for SQL files, or `--command "ALTER TABLE ..."` for single statements (e.g. `ALTER TABLE email DROP COLUMN thread_id`). `--remote` for local deployments.
 
 ## Email data model
 The `email` table uses two columns to encode email state — get these wrong and everything breaks:

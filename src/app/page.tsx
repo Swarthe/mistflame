@@ -459,7 +459,10 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
     onCancel: () => void;
 }) {
     const replyAsType: 'mistflame' | 'contact' = replyTo ? (replyTo.sender !== null ? 'contact' : 'mistflame') : 'mistflame';
-    const replyAsSender = threadSender ?? sendAddrs[0] ?? '';
+    // When replying to an inbound email with no prior outgoing emails in the thread,
+    // lock the sender to the address that received the inbound email.
+    const effectiveThreadSender = threadSender ?? (replyTo?.sender === null ? replyTo.recipient : null) ?? null;
+    const replyAsSender = effectiveThreadSender ?? sendAddrs[0] ?? '';
     const initialSubject = replyTo?.subject ? `Re: ${replyTo.subject.replace(/^(Re:\s*)+/i, '')}` : '';
     const [senderType, setSenderType] = useState<'mistflame' | 'contact'>(replyAsType);
     const [senderAddr, setSenderAddr] = useState(replyAsSender);
@@ -471,8 +474,8 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const isUs = senderType === 'mistflame';
-    const addrLocked = isUs && threadSender !== null;
-    const effectiveAddr = addrLocked ? threadSender! : senderAddr;
+    const addrLocked = isUs && effectiveThreadSender !== null;
+    const effectiveAddr = addrLocked ? effectiveThreadSender! : senderAddr;
     const sender = isUs ? (effectiveAddr || null) : null;
     const cardCls = `flex flex-col gap-3 p-4 border ${isUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}`;
 
@@ -497,7 +500,7 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
                         </select>
                     )}
                     {isUs && (addrLocked ? (
-                        <span className="w-48 shrink-0 text-sm font-sans text-white/35 flex items-center border border-white/10 bg-white/[0.04] px-3 py-2.5">{threadSender}</span>
+                        <span className="w-48 shrink-0 text-sm font-sans text-white/35 flex items-center border border-white/10 bg-white/[0.04] px-3 py-2.5">{effectiveThreadSender}</span>
                     ) : (
                         <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={senderAddr} onChange={e => setSenderAddr(e.target.value)}>
                             {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
@@ -567,6 +570,7 @@ export default function OutreachPage() {
     });
     const [emails, setEmails] = useState<EmailRecord[]>([]);
     const [loadingContacts, setLoadingContacts] = useState(true);
+    const [contactsError, setContactsError] = useState(false);
     const [loadingEmails, setLoadingEmails] = useState(false);
     const [saving, setSaving] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
@@ -601,6 +605,16 @@ export default function OutreachPage() {
         );
     });
 
+    const fetchContacts = () => {
+        setLoadingContacts(true);
+        setContactsError(false);
+        apiFetch('/api/contacts')
+            .then(r => r.ok ? r.json() : Promise.reject())
+            .then((data: unknown) => { setContacts(((data as { contacts?: Contact[] }).contacts) ?? []); setContactsError(false); })
+            .catch(() => setContactsError(true))
+            .finally(() => setLoadingContacts(false));
+    };
+
     useEffect(() => {
         apiFetch('/api/config')
             .then(r => r.json())
@@ -609,11 +623,7 @@ export default function OutreachPage() {
                 setConfig(cfg);
             })
             .catch(() => {});
-        apiFetch('/api/contacts')
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-            .catch(() => {})
-            .finally(() => setLoadingContacts(false));
+        fetchContacts();
         apiFetch('/api/send-emails')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
@@ -688,7 +698,7 @@ export default function OutreachPage() {
         apiFetch('/api/contacts')
             .then(r => r.ok ? r.json() : Promise.reject())
             .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-            .catch(() => {});
+            .catch(() => {}); // background refresh after mutation — keep existing contacts on error
     };
 
     const refreshPendingCount = () => {
@@ -1032,7 +1042,13 @@ export default function OutreachPage() {
                         {loadingContacts && (
                             <p className="text-sm text-white/55 text-center py-8 font-sans">Loading…</p>
                         )}
-                        {!loadingContacts && contacts.length === 0 && (
+                        {!loadingContacts && contactsError && (
+                            <div className="text-center py-8 flex flex-col items-center gap-3">
+                                <p className="text-sm text-white/55 font-sans">Failed to load contacts</p>
+                                <button onClick={fetchContacts} className="text-xs font-sans text-white/50 hover:text-white/80 transition-colors">Retry</button>
+                            </div>
+                        )}
+                        {!loadingContacts && !contactsError && contacts.length === 0 && (
                             <p className="text-sm text-white/55 text-center py-8 font-sans">No contacts yet</p>
                         )}
                         {!loadingContacts && contacts.length > 0 && filteredContacts.length === 0 && (

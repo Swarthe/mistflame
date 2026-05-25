@@ -33,7 +33,7 @@ bucket_name = "mistflame-attachments"
 # Shown in the UI as "Mistflame - <name>" and used as the display name in email From: headers.
 ORG_NAME = ""
 # Comma-separated list of sender addresses available in the UI.
-SEND_ADDRS = "hello@example.com,other@example.com"
+SEND_ADDRS = "alice@example.com,bob@example.com"
 # Session duration in hours.
 SESSION_TTL_HOURS = "24"
 

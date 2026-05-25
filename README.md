@@ -98,6 +98,8 @@ run deploy` only redeploys the main worker).
 npx wrangler secret put PASSWORD
 ```
 
+> **Warning:** if `PASSWORD` is not set, the site is unprotected; anyone can log in by submitting an empty password.
+
 ## Configuration
 
 All branding and addresses are set as `[vars]` in `wrangler.toml`, no code
@@ -107,7 +109,7 @@ changes needed to customise the app for a new deployment.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame — {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
+| `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
 | `SESSION_TTL_HOURS` | `"24"` | Session token lifetime in hours |
 
@@ -135,7 +137,6 @@ Secrets are never stored in config files.
   401, page requests redirect to `/login`
 - If a session expires mid-use, the next API call returns 401 and the UI
   automatically redirects to `/login`
-- If `PASSWORD` is unset, login is blocked for everyone (fails closed)
 - **Recommended:** add a Cloudflare WAF rate limiting rule on all `/api/*` paths
   to prevent brute force:
   - Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
@@ -208,6 +209,15 @@ scripts/
   harmless, `@opennextjs/cloudflare` 1.x requires this convention
 - D1 FK constraints are declared in the schema but not enforced at runtime;
   cascading deletes are handled manually in route handlers
+- `thread_id` is not stored in the database; it is computed at query time via a
+  recursive CTE over `parent_id` and `DENSE_RANK()`, so threads are always
+  consistent with the actual reply structure
+- To apply incremental schema changes to an existing deployment, use `--file`
+  for SQL files, `--local` for local deployments and
+  `--command "ALTER TABLE ..."` for single statements:
+  ```bash
+  npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email DROP COLUMN thread_id"
+  ```
 
 ## License
 
