@@ -112,6 +112,7 @@ changes needed to customise the app for a new deployment.
 | `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
 | `SESSION_TTL_HOURS` | `"24"` | Session token lifetime in hours |
+| `NOTIFY_ADDRS` | `""` | Comma-separated list of addresses to email when a new inbound message arrives; leave empty to disable |
 
 ### Bindings
 

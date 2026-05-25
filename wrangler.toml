@@ -36,6 +36,8 @@ ORG_NAME = ""
 SEND_ADDRS = "alice@example.com,bob@example.com"
 # Session duration in hours.
 SESSION_TTL_HOURS = "24"
+# Comma-separated list of addresses to notify when a new email is received. Leave empty to disable.
+NOTIFY_ADDRS = ""
 
 [[d1_databases]]
 binding = "DB"

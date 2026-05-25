@@ -11,3 +11,9 @@ database_id = "YOUR_D1_DATABASE_ID"
 [[r2_buckets]]
 binding = "ATTACHMENTS"
 bucket_name = "mistflame-attachments"
+
+[[send_email]]
+name = "EMAIL_SENDER"
+
+[vars]
+NOTIFY_ADDRS = ""

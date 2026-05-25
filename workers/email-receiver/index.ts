@@ -3,7 +3,12 @@ import PostalMime from 'postal-mime';
 interface Env {
     DB: D1Database;
     ATTACHMENTS: R2Bucket;
+    EMAIL_SENDER: SendEmail;
+    NOTIFY_ADDRS?: string;
 }
+
+const generateMessageId = (domain: string) =>
+    `${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}`;
 
 export default {
     async email(message: ForwardableEmailMessage, env: Env) {
@@ -17,9 +22,9 @@ export default {
         const body = parsed.text ?? parsed.html ?? '';
 
         let contact = await env.DB
-            .prepare('SELECT id FROM contact WHERE LOWER(email) = ?')
+            .prepare('SELECT id, name FROM contact WHERE LOWER(email) = ?')
             .bind(fromEmail)
-            .first<{ id: number }>();
+            .first<{ id: number; name: string }>();
 
         if (!contact) {
             const contactName = parsed.from?.name?.trim() || fromEmail;
@@ -28,9 +33,9 @@ export default {
                 .bind(contactName, fromEmail)
                 .run();
             contact = await env.DB
-                .prepare('SELECT id FROM contact WHERE LOWER(email) = ?')
+                .prepare('SELECT id, name FROM contact WHERE LOWER(email) = ?')
                 .bind(fromEmail)
-                .first<{ id: number }>();
+                .first<{ id: number; name: string }>();
             if (!contact) return;
         }
 
@@ -88,6 +93,38 @@ export default {
                 .prepare('INSERT INTO attachment (email_id, file_name, content_type, r2_key, size) VALUES (?, ?, ?, ?, ?)')
                 .bind(emailId, filename, contentType, r2Key, data.byteLength)
                 .run();
+        }
+
+        const notifyAddrs = (env.NOTIFY_ADDRS ?? '').split(',').map(a => a.trim()).filter(Boolean);
+        if (notifyAddrs.length === 0) return;
+
+        const safeSubject = (subject ?? '(no subject)').replace(/[\r\n]/g, ' ');
+        const bodyText = body.trim();
+        const preview = bodyText.length > 500 ? bodyText.slice(0, 500) + `\n\n[+${bodyText.length - 500} characters]` : bodyText;
+        const displayFrom = contact.name !== fromEmail ? `${contact.name} <${fromEmail}>` : fromEmail;
+
+        const notifyRaw = [
+            `From: <${recipient}>`,
+            `Message-ID: <${generateMessageId(recipient.split('@')[1] ?? 'localhost')}>`,
+            `Subject: New message from ${displayFrom.replace(/[\r\n]/g, '')}`,
+            'MIME-Version: 1.0',
+            'Content-Type: text/plain; charset=UTF-8',
+            '',
+            `From:    ${displayFrom}`,
+            `To:      ${recipient}`,
+            `Subject: ${safeSubject}`,
+            '',
+            '---',
+            '',
+            preview,
+        ].join('\r\n');
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const cfEmail = await import(('cloudflare' + ':email') as any);
+        for (const addr of notifyAddrs) {
+            try {
+                await env.EMAIL_SENDER.send(new cfEmail.EmailMessage(recipient, addr, notifyRaw));
+            } catch { /* notification failure must not affect inbound processing */ }
         }
     },
 };

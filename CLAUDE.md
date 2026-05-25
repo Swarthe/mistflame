@@ -18,6 +18,7 @@ All branding and addresses are set via Cloudflare `[vars]` in `wrangler.toml` (n
 | `ORG_NAME` | Organisation/project name — when set, shown in the UI as "Mistflame — {ORG_NAME}" and used as the display name in email From: headers; defaults to empty (shows "Mistflame" only) |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
 | `SESSION_TTL_HOURS` | Session token lifetime in hours (default `24`) |
+| `NOTIFY_ADDRS` | Comma-separated addresses to notify on inbound email (empty = disabled); set in both `wrangler.toml` and `workers/email-receiver/wrangler.toml` |
 | `PASSWORD` | Secret — login password |
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in values.
