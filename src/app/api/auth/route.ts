@@ -15,7 +15,7 @@ export async function POST(request: Request) {
     const { env } = await getCloudflareContext({ async: true });
 
     const ttlHours = Math.max(1, parseInt(env.SESSION_TTL_HOURS ?? '24', 10) || 24);
-    const COOKIE_MAX_AGE = ttlHours * 60 * 60;
+    const kvTtl = ttlHours * 60 * 60;
 
     if (password !== (env.PASSWORD ?? '')) {
         return Response.json({ ok: false, error: 'Incorrect password.' }, { status: 401 });
@@ -30,10 +30,10 @@ export async function POST(request: Request) {
 
     const token = env.DEV_MODE ? 'dev-session-token' : crypto.randomUUID();
     if (!env.DEV_MODE) {
-        await env.SESSION.put(SESSION_KEY, token, { expirationTtl: COOKIE_MAX_AGE });
+        await env.SESSION.put(SESSION_KEY, token, { expirationTtl: kvTtl });
     }
 
-    const cookieFlags = `Path=/; Max-Age=${COOKIE_MAX_AGE}; HttpOnly; SameSite=Strict`;
+    const cookieFlags = `Path=/; HttpOnly; SameSite=Strict`;
     const secure = !env.DEV_MODE ? '; Secure' : '';
 
     const response = Response.json({ ok: true });

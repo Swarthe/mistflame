@@ -22,7 +22,7 @@ All branding and addresses are set via Cloudflare `[vars]` in `wrangler.toml` (n
 |---|---|
 | `ORG_NAME` | Organisation/project name — when set, shown in the UI as "Mistflame — {ORG_NAME}" and used as the display name in email From: headers; defaults to empty (shows "Mistflame" only) |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
-| `SESSION_TTL_HOURS` | Session token lifetime in hours (default `24`) |
+| `SESSION_TTL_HOURS` | KV expiry for the server-side session token (default `24`); the browser cookie is a session cookie with no max-age, so the session always ends when the browser closes regardless of this value |
 | `NOTIFY_ADDRS` | Comma-separated addresses to notify on inbound email (empty = disabled); set in both `wrangler.toml` and `email-receiver/wrangler.toml` |
 | `RATE_LIMIT_MAX` | Soft limit on inbound emails per window (`0` = disabled); set in `email-receiver/wrangler.toml` — requires `KV` binding. Enforced via a KV counter (read-increment-write), so burst races can exceed the limit slightly; effective against sustained spam |
 | `RATE_LIMIT_WINDOW_MINUTES` | Window length in minutes for the rate limit (default `60`) |

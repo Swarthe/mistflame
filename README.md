@@ -118,7 +118,7 @@ changes needed to customise the app for a new deployment.
 |---|---|---|
 | `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
-| `SESSION_TTL_HOURS` | `"24"` | Session token lifetime in hours |
+| `SESSION_TTL_HOURS` | `"24"` | Server-side KV expiry for the session token; the browser cookie is a session cookie (no max-age), so the session always ends when the browser closes |
 | `NOTIFY_ADDRS` | `""` | Comma-separated list of addresses to email when a new inbound message arrives; leave empty to disable |
 | `RATE_LIMIT_MAX` | `"0"` | Soft limit on inbound emails per window (`0` = disabled); requires a `KV` binding on the email receiver worker. Enforced via a KV counter — not a hard guarantee, but effective against sustained spam |
 | `RATE_LIMIT_WINDOW_MINUTES` | `"60"` | Window length in minutes for the rate limit |
@@ -148,12 +148,13 @@ Secrets are never stored in config files.
   401, page requests redirect to `/login`
 - If a session expires mid-use, the next API call returns 401 and the UI
   automatically redirects to `/login`
-- **Recommended:** add a Cloudflare WAF rate limiting rule on all `/api/*` paths
-  to prevent brute force:
+- **Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force:
   - Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
-  - Field: URI Path starts with `/api`, Method: any
+  - Fields: **Hostname** equals `your-domain.com` **AND** **URI Path** starts with `/api`
   - Threshold: 20 requests per 10 seconds per IP
   - Action: Block, Duration: 10 seconds
+  - Scoping by hostname matters if other workers share the same Cloudflare zone
+    — a plain `/api/*` rule would also rate-limit API routes on those workers
 
 ## Features
 
