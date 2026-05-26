@@ -61,7 +61,7 @@ export default function LoginPage() {
                         <button
                             type="submit"
                             disabled={loading}
-                            className="bg-white/70 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="bg-white/80 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                         >
                             {loading ? 'Checking…' : 'Enter'}
                         </button>
@@ -79,7 +79,7 @@ export default function LoginPage() {
                         <button
                             onClick={() => submit(true)}
                             disabled={loading}
-                            className="bg-white/70 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="bg-white/80 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                             {loading ? 'Logging in…' : 'Log in anyway'}
                         </button>
