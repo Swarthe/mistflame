@@ -40,7 +40,7 @@ export default function LoginPage() {
     return (
         <main className="min-h-screen bg-black flex items-center justify-center px-4">
             <div className="flex flex-col gap-4 w-full max-w-xs">
-                <div className="mb-2">
+                <div className="mb-2 text-center">
                     <h1 className="font-heading-bold text-2xl tracking-wide">
                         <span className="text-[#ffd54f]">Mistflame</span>
                         {orgName && <><span className="text-white/30 mx-1.5">—</span><span className="text-white">{orgName}</span></>}

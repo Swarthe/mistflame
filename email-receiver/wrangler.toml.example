@@ -2,6 +2,8 @@ name = "mistflame-email-receiver"
 main = "index.ts"
 compatibility_date = "2026-04-02"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+preview_urls = false
 
 [[d1_databases]]
 binding = "DB"

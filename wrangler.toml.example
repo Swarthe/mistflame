@@ -11,9 +11,6 @@ binding = "ASSETS"
 binding = "WORKER_SELF_REFERENCE"
 service = "mistflame"
 
-[limits]
-cpu_ms = 30000
-
 [observability]
 enabled = true
 
