@@ -17,8 +17,8 @@ Workers via [OpenNext](https://opennext.js.org/cloudflare).
 
 ```bash
 npm install
-cp wrangler.toml.example wrangler.toml                                       # fill in IDs
-cp workers/email-receiver/wrangler.toml.example workers/email-receiver/wrangler.toml
+cp wrangler.toml.example wrangler.toml                     # fill in IDs
+cp email-receiver/wrangler.toml.example email-receiver/wrangler.toml
 cp .dev.vars.example .dev.vars                                               # fill in values
 npm run dev                       # local Next.js dev server (no CF bindings)
 npm run preview                   # Cloudflare Workers preview with local binding simulators
@@ -93,11 +93,11 @@ addresses to `SEND_ADDRS` (comma-separated) to send from different domains.
 The inbound worker has its own `wrangler.toml` and is deployed independently:
 
 ```bash
-npx wrangler deploy --config workers/email-receiver/wrangler.toml
+npx wrangler deploy --config email-receiver/wrangler.toml
 ```
 
-Redeploy this worker whenever `workers/email-receiver/index.ts` changes (`npm
-run deploy` only redeploys the main worker).
+Redeploy this worker whenever `email-receiver/index.ts` changes (`npm run
+deploy` only redeploys the main worker).
 
 ### 6. Secrets
 
@@ -199,10 +199,9 @@ src/
   middleware.ts                 # Auth guard for all routes except /login and /api/config
   env.d.ts                      # Cloudflare env type declarations
 
-workers/
-  email-receiver/
-    index.ts                    # Inbound email worker
-    wrangler.toml               # Separate config; deploy independently
+email-receiver/
+  index.ts                      # Inbound email worker
+  wrangler.toml                 # Separate config; deploy independently
 
 schema.sql                      # D1 schema (apply once with wrangler d1 execute)
 

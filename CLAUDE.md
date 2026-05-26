@@ -3,10 +3,10 @@
 ## Checks
 - Typecheck: `npx tsc --noEmit`
 - No test suite. Verify changes manually via `npm run preview`.
-- `wrangler.toml` and `workers/email-receiver/wrangler.toml` are gitignored. Copy from the `.example` files before running preview:
+- `wrangler.toml` and `email-receiver/wrangler.toml` are gitignored. Copy from the `.example` files before running preview:
   ```
   cp wrangler.toml.example wrangler.toml
-  cp workers/email-receiver/wrangler.toml.example workers/email-receiver/wrangler.toml
+  cp email-receiver/wrangler.toml.example email-receiver/wrangler.toml
   ```
 
 ## Stack constraints
@@ -23,8 +23,8 @@ All branding and addresses are set via Cloudflare `[vars]` in `wrangler.toml` (n
 | `ORG_NAME` | Organisation/project name — when set, shown in the UI as "Mistflame — {ORG_NAME}" and used as the display name in email From: headers; defaults to empty (shows "Mistflame" only) |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
 | `SESSION_TTL_HOURS` | Session token lifetime in hours (default `24`) |
-| `NOTIFY_ADDRS` | Comma-separated addresses to notify on inbound email (empty = disabled); set in both `wrangler.toml` and `workers/email-receiver/wrangler.toml` |
-| `RATE_LIMIT_MAX` | Soft limit on inbound emails per window (`0` = disabled); set in `workers/email-receiver/wrangler.toml` — requires `KV` binding. Enforced via a KV counter (read-increment-write), so burst races can exceed the limit slightly; effective against sustained spam |
+| `NOTIFY_ADDRS` | Comma-separated addresses to notify on inbound email (empty = disabled); set in both `wrangler.toml` and `email-receiver/wrangler.toml` |
+| `RATE_LIMIT_MAX` | Soft limit on inbound emails per window (`0` = disabled); set in `email-receiver/wrangler.toml` — requires `KV` binding. Enforced via a KV counter (read-increment-write), so burst races can exceed the limit slightly; effective against sustained spam |
 | `RATE_LIMIT_WINDOW_MINUTES` | Window length in minutes for the rate limit (default `60`) |
 | `PASSWORD` | Secret — login password |
 
@@ -56,8 +56,8 @@ The `email` table uses two columns to encode email state — get these wrong and
 - The email receiver backfills `message_id` on a sent email when a reply arrives (using the inbound `In-Reply-To` header), so that subsequent replies thread correctly via `In-Reply-To` matching.
 
 ## Email worker
-- The email receiver (`workers/email-receiver/index.ts`) is a **separate worker** with its own `wrangler.toml`. `npm run deploy` does not redeploy it.
-- Deploy: `npx wrangler deploy --config workers/email-receiver/wrangler.toml`
+- The email receiver (`email-receiver/index.ts`) is a **separate worker** with its own `wrangler.toml`. `npm run deploy` does not redeploy it.
+- Deploy: `npx wrangler deploy --config email-receiver/wrangler.toml`
 
 ## Shared constants
 - `isValidEmail` is exported from `src/app/api/contacts/route.ts` for server-side use. It is also defined inline in `page.tsx` for client-side use — this duplication is intentional (different environments); do not consolidate.
