@@ -33,11 +33,9 @@ bucket_name = "mistflame-attachments"
 # Shown in the UI as "Mistflame - <name>" and used as the display name in email From: headers.
 ORG_NAME = ""
 # Comma-separated list of sender addresses available in the UI.
-SEND_ADDRS = "alice@example.com,bob@example.com"
+SEND_ADDRS = "hello@example.com"
 # Session duration in hours.
 SESSION_TTL_HOURS = "24"
-# Comma-separated list of addresses to notify when a new email is received. Leave empty to disable.
-NOTIFY_ADDRS = ""
 
 [[d1_databases]]
 binding = "DB"

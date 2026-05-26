@@ -1,47 +1,82 @@
 # Mistflame
 
-A self-contained email manager built for CRM. Manage contacts, draft and send
-emails, track reply threads, and handle inbound replies. Deployed on Cloudflare
-Workers via [OpenNext](https://opennext.js.org/cloudflare).
+Mistflame is a lightweight, self-hosted email manager for small-scale
+outreach/CRM and personal email domains. It gives you a single organised view of
+your contacts and the complete email history with each one. You can compose
+outbound drafts in the UI, and inbound replies arrive automatically via
+Cloudflare Email Routing.
+
+![Mistflame screenshot](screenshot.png)
+
+This software is intended for solo operators or small teams who need to
+comprehensively manage emails and track conversations without the overhead of a
+full CRM platform.
+
+Deployed entirely on Cloudflare's infrastructure: Workers (compute), D1 (SQLite
+database), KV (session storage), R2 (attachments), and Email Workers (send and
+receive).
+
+## Features
+
+**Contacts**
+- Add, edit, and delete contacts (name, email, description)
+- Freeform colour-coded tags, fuzzy-searchable from the sidebar
+- Auto-computed awaiting-reply indicator per contact
+
+**Email history**
+- Full email log per contact, grouped by thread
+- Draft emails are editable after creation
+- Outgoing emails support CC (stored in DB, delivered separately per address)
+
+**Sending**
+- Send all pending drafts at once, or send individual emails inline
+- Choose sender address per send; attachments supported (up to 10 MB each, sent
+  as `multipart/mixed`)
+- Sender email is automatically determined for replies to inbound emails
+- Requires the Cloudflare Workers Paid plan (email sending is a beta feature);
+  receiving and viewing emails works without it
+
+**Receiving**
+- Inbound emails matched to contacts by sender address
+- Reply threading via `In-Reply-To` header matching with a subject-line fallback
+- Attachments stored in R2 and shown in the UI
+- Unknown senders auto-created as new contacts (name from display name, email
+  from sender address)
+- Optional email notification to one or more addresses when a new inbound
+  message arrives (see `NOTIFY_ADDRS`)
+- Configurable rate limit on inbound emails to guard against spam (see
+  `RATE_LIMIT_MAX`)
+
+**Access**
+- Single-user: one password, one active session at a time
+- Logging in while a session is active shows a confirmation prompt
 
 ## Stack
 
 - **Next.js 16** (App Router)
 - **Cloudflare Workers**: hosting
 - **Cloudflare D1**: contacts and email history
-- **Cloudflare KV**: session storage
+- **Cloudflare KV**: session storage and spam tracking
 - **Cloudflare R2**: email attachments
-- **Cloudflare Email Workers**: sending and receiving email
+- **Cloudflare Email Workers**: sending and receiving emails
 
-## Development
+## Setup
+
+### 1. Clone and install
 
 ```bash
+git clone https://github.com/Swarthe/mistflame
+cd mistflame
 npm install
-cp wrangler.toml.example wrangler.toml                     # fill in IDs
+cp wrangler.toml.example wrangler.toml
 cp email-receiver/wrangler.toml.example email-receiver/wrangler.toml
-cp .dev.vars.example .dev.vars                                               # fill in values
-npm run dev                       # local Next.js dev server (no CF bindings)
-npm run preview                   # Cloudflare Workers preview with local binding simulators
-npm run preview:remote            # Cloudflare Workers preview against real remote bindings
 ```
 
-`wrangler.toml` and `workers/email-receiver/wrangler.toml` are gitignored so that
-deployment-specific IDs are not committed. `wrangler.toml.example` is the
-tracked template — copy it once and fill in the IDs from the Cloudflare setup
-steps below.
+`wrangler.toml` and `email-receiver/wrangler.toml` are gitignored; the
+`.example` files are the tracked templates. You will fill in the IDs as you
+create Cloudflare resources below.
 
-## Deployment
-
-```bash
-npm run deploy
-```
-
-The email receiver worker is deployed separately (see [Email
-receiver](#email-receiver) below).
-
-## Cloudflare setup
-
-### 1. KV namespace
+### 2. KV namespace
 
 ```bash
 npx wrangler kv namespace create SESSION
@@ -49,7 +84,7 @@ npx wrangler kv namespace create SESSION
 
 Copy the returned ID into `wrangler.toml` under `[[kv_namespaces]]`.
 
-### 2. D1 database
+### 3. D1 database
 
 ```bash
 npx wrangler d1 create mistflame-db
@@ -61,7 +96,7 @@ Copy the returned database ID into `wrangler.toml`, then apply the schema:
 npx wrangler d1 execute mistflame-db --remote --file schema.sql
 ```
 
-### 3. R2 bucket
+### 4. R2 bucket
 
 ```bash
 npx wrangler r2 bucket create mistflame-attachments
@@ -69,43 +104,47 @@ npx wrangler r2 bucket create mistflame-attachments
 
 No ID needed, R2 bindings reference the bucket by name.
 
-### 4. Email routing
+### 5. Email routing
 
 Email routing must be enabled on the domain before any email bindings work.
 
-**Cloudflare Dashboard -> your domain -> Email -> Email Routing -> Enable**
+**Cloudflare Dashboard -> [your domain] -> Email -> Email Routing -> Enable**
 
 Cloudflare will add the required MX records automatically.
 
-**Receiving:** add a catch-all route to the inbound worker:
-- Email Routing -> Routes -> Add rule: **Catch-all** -> **Send to Worker** ->
-  `mistflame-email-receiver`
+**Receiving:** route inbound email to the worker for each address you want to
+receive on:
+- Email Routing -> Routes -> Add rule: **Custom address** (e.g. `hello@yourdomain.com`)
+  -> **Send to Worker** -> `mistflame-email-receiver`
+
+Alternatively, use a **Catch-all** rule to receive on all addresses for the
+domain (useful if you want replies to any address to land in Mistflame, or if
+you have not set up individual addresses).
 
 To receive on multiple domains, enable Email Routing on each domain and add the
-same catch-all route pointing to the same worker.
+same per-address or catch-all route pointing to the same worker.
 
 **Sending:** the `send_email` binding works for any address on any domain that
 has Email Routing active, no per-address verification needed. Add multiple
 addresses to `SEND_ADDRS` (comma-separated) to send from different domains.
 
-### 5. Email receiver worker
+> **Note:** outbound email sending via `EMAIL_SENDER` requires the **Cloudflare
+> Workers Paid plan**; it is a beta feature not available on the free tier.
+> Receiving inbound emails, storing them, and viewing the full UI all work
+> without it; only the send action will fail if the binding is unavailable.
 
-The inbound worker has its own `wrangler.toml` and is deployed independently:
+### 6. Security
 
-```bash
-npx wrangler deploy --config email-receiver/wrangler.toml
-```
+**Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force
+attacks:
 
-Redeploy this worker whenever `email-receiver/index.ts` changes (`npm run
-deploy` only redeploys the main worker).
+1. Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
+2. Fields: **Hostname** equals `your-domain.com` **AND** **URI Path** starts with `/api`
+3. Threshold: 20 requests per 10 seconds per IP (example)
+4. Action: Block, Duration: 10 seconds
 
-### 6. Secrets
-
-```bash
-npx wrangler secret put PASSWORD
-```
-
-> **Warning:** if `PASSWORD` is not set, the site is unprotected; anyone can log in by submitting an empty password.
+Scoping by hostname matters if other workers share the same Cloudflare zone; a
+plain `/api/*` rule also rate-limits API routes on those workers.
 
 ## Configuration
 
@@ -119,8 +158,13 @@ changes needed to customise the app for a new deployment.
 | `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
 | `SESSION_TTL_HOURS` | `"24"` | Server-side KV expiry for the session token; the browser cookie is a session cookie (no max-age), so the session always ends when the browser closes |
+
+### Email receiver worker (`email-receiver/wrangler.toml`)
+
+| Var | Default | Purpose |
+|---|---|---|
 | `NOTIFY_ADDRS` | `""` | Comma-separated list of addresses to email when a new inbound message arrives; leave empty to disable |
-| `RATE_LIMIT_MAX` | `"0"` | Soft limit on inbound emails per window (`0` = disabled); requires a `KV` binding on the email receiver worker. Enforced via a KV counter — not a hard guarantee, but effective against sustained spam |
+| `RATE_LIMIT_MAX` | `"30"` | Soft limit on inbound emails per window (`0` = disabled); requires the `KV` binding. Enforced via a KV counter; not a hard guarantee, but effective against sustained spam |
 | `RATE_LIMIT_WINDOW_MINUTES` | `"60"` | Window length in minutes for the rate limit |
 
 ### Bindings
@@ -134,101 +178,70 @@ changes needed to customise the app for a new deployment.
 | `KV` | KV Namespace | Rate limit counters (email receiver only; can share the `SESSION` namespace) |
 | `PASSWORD` | Secret | Login password |
 
-For local development, set these in `.dev.vars` (see `.dev.vars.example`).
+## Deployment
+
+### 1. Set password
+
+```bash
+npx wrangler secret put PASSWORD
+```
+
+> **Warning:** if `PASSWORD` is not set, the site is unprotected; anyone can log in by submitting an empty password.
+
+### 2. Deploy main worker
+
+```bash
+npm run deploy
+```
+
+### 3. Deploy email receiver worker
+
+The inbound worker has its own `wrangler.toml` and must be deployed separately:
+
+```bash
+npx wrangler deploy --config email-receiver/wrangler.toml
+```
+
+Redeploy this worker whenever `email-receiver/index.ts` changes (`npm run
+deploy` only redeploys the main worker).
+
+## Development
+
+For local development, copy `.dev.vars.example` to `.dev.vars` and fill in values.
 Secrets are never stored in config files.
 
-## Security
-
-- Single-user password authentication; session stored as a random token in KV
-  with a 1-day TTL
-- Only one active session at a time, logging in while a session exists shows a
-  confirmation prompt
-- Session cookie is `HttpOnly; Secure; SameSite=Strict`
-- All routes are protected by middleware; unauthenticated API requests get a
-  401, page requests redirect to `/login`
-- If a session expires mid-use, the next API call returns 401 and the UI
-  automatically redirects to `/login`
-- **Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force:
-  - Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
-  - Fields: **Hostname** equals `your-domain.com` **AND** **URI Path** starts with `/api`
-  - Threshold: 20 requests per 10 seconds per IP
-  - Action: Block, Duration: 10 seconds
-  - Scoping by hostname matters if other workers share the same Cloudflare zone
-    — a plain `/api/*` rule would also rate-limit API routes on those workers
-
-## Features
-
-**Contacts**
-- Add, edit, and delete contacts (name, email, description)
-- Freeform colour-coded tags, fuzzy-searchable from the sidebar
-- Auto-computed awaiting-reply indicator per contact
-
-**Email history**
-- Full email log per contact, grouped by thread
-- Draft emails (`sent_at IS NULL`) are editable after creation
-- Outgoing emails support CC (stored in DB, delivered separately per address)
-
-**Sending**
-- Send all pending drafts at once, or send individual emails inline
-- Choose sender address per send; attachments supported (up to 10 MB each, sent as `multipart/mixed`)
-- All manually composed emails and replies are outgoing (mistflame sender) — inbound emails can only arrive via the email receiver worker
-- Reply is only available on inbound emails; the sender address is locked to the address that received the inbound
-
-**Receiving**
-- Inbound emails matched to contacts by sender address
-- Reply threading via `In-Reply-To` header matching with a subject-line fallback
-- Attachments stored in R2 and shown in the UI
-- Unknown senders auto-created as new contacts (name from display name, email from sender address)
-
-## Project layout
-
+```bash
+cp .dev.vars.example .dev.vars      # fill in values
+npm run dev                         # local Next.js dev server (no CF bindings)
+npm run preview                     # Cloudflare Workers preview with local binding simulators
+npm run preview:remote              # Cloudflare Workers preview against real remote bindings
 ```
-src/
-  app/
-    page.tsx                    # Main UI (contacts + email threads)
-    login/page.tsx              # Login form
-    api/
-      auth/route.ts             # Login (POST) / logout (DELETE)
-      config/route.ts           # Public endpoint returning ORG_NAME, SEND_ADDRS
-      contacts/route.ts         # List (GET) / create (POST)
-      contacts/[id]/route.ts    # Update (PUT) / delete (DELETE)
-      contacts/[id]/emails/route.ts
-      contacts/[id]/emails/[emailId]/route.ts
-      contacts/[id]/emails/[emailId]/attachments/route.ts
-      contacts/[id]/emails/[emailId]/attachments/[attachmentId]/route.ts
-      send-emails/route.ts      # Count pending (GET) / send (POST)
-      tags/route.ts             # List all tags (GET, used for tag autocomplete)
-  middleware.ts                 # Auth guard for all routes except /login and /api/config
-  env.d.ts                      # Cloudflare env type declarations
 
-email-receiver/
-  index.ts                      # Inbound email worker
-  wrangler.toml                 # Separate config; deploy independently
+## Limitations and missing features
 
-schema.sql                      # D1 schema (apply once with wrangler d1 execute)
+Contributions and feature requests are welcome. The following features are not
+currently implemented.
 
-scripts/
-  patch-opennext.mjs            # Post-build patch for cloudflare:email ESM import
-```
+- **HTML email rendering**: inbound emails are displayed as plain text; HTML
+  parts are not rendered
+- **Full email search**: no full-text search across email bodies or subjects
+- **Contact import/export**: no CSV or vCard import/export
+- **Pagination**: long contact lists and email histories are loaded in full
+- **Email templates**: no reusable draft templates
+- **Scheduled sending**: no support for sending emails at a scheduled time
+- **Multi-user access**: single-user only by design; no role-based access or
+  shared sessions
 
 ## Notes
 
-- `@opennextjs/cloudflare` does not support `export const runtime = 'edge'`, all
-  API routes use the default runtime
-- `cloudflare:email` is ESM-only; `scripts/patch-opennext.mjs` patches the
-  OpenNext bundle on every `npm install` and build
 - The `middleware.ts` deprecation warning during builds is expected and
   harmless, `@opennextjs/cloudflare` 1.x requires this convention
 - D1 FK constraints are declared in the schema but not enforced at runtime;
   cascading deletes are handled manually in route handlers
-- `thread_id` is not stored in the database; it is computed at query time via a
-  recursive CTE over `parent_id` and `DENSE_RANK()`, so threads are always
-  consistent with the actual reply structure
 - To apply incremental schema changes to an existing deployment, use `--file`
-  for SQL files, `--local` for local deployments and
-  `--command "ALTER TABLE ..."` for single statements:
+  for SQL files, or `--command "ALTER TABLE ..."` for single statements:
   ```bash
-  npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email DROP COLUMN thread_id"
+  npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD COLUMN notes TEXT"
   ```
 
 ## License
