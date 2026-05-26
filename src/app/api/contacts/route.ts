@@ -116,14 +116,20 @@ export async function upsertTags(
     for (const tag of tags) {
         const trimmed = tag.name.trim();
         if (!trimmed) continue;
-        await env.DB
-            .prepare('INSERT OR IGNORE INTO tag (name, color) VALUES (?, ?)')
-            .bind(trimmed, tag.color)
-            .run();
-        const row = await env.DB
-            .prepare('SELECT id, name, color FROM tag WHERE name = ?')
+        let row = await env.DB
+            .prepare('SELECT id, name, color FROM tag WHERE LOWER(name) = LOWER(?)')
             .bind(trimmed)
             .first<{ id: number; name: string; color: string }>();
+        if (!row) {
+            await env.DB
+                .prepare('INSERT OR IGNORE INTO tag (name, color) VALUES (?, ?)')
+                .bind(trimmed, tag.color)
+                .run();
+            row = await env.DB
+                .prepare('SELECT id, name, color FROM tag WHERE LOWER(name) = LOWER(?)')
+                .bind(trimmed)
+                .first<{ id: number; name: string; color: string }>();
+        }
         if (!row) continue;
         await env.DB
             .prepare('INSERT OR IGNORE INTO contact_tag (contact_id, tag_id) VALUES (?, ?)')

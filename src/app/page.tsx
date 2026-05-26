@@ -137,7 +137,7 @@ function ContactForm({ value, onChange, onSave, onCancel, saving, saveError }: {
         const name = tagInput.trim();
         if (!name) return;
         if (currentTags.some(t => t.name.toLowerCase() === name.toLowerCase())) return;
-        onChange({ ...value, tags: [...currentTags, { id: matchedTag?.id ?? 0, name, color: effectiveColor }] });
+        onChange({ ...value, tags: [...currentTags, { id: matchedTag?.id ?? 0, name: matchedTag?.name ?? name, color: effectiveColor }] });
         setTagInput('');
         setTagColor('#888888');
     };
