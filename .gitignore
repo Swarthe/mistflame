@@ -26,3 +26,5 @@ next-env.d.ts
 .wrangler
 .dev.vars*
 !.dev.vars.example
+wrangler.toml*
+!wrangler.toml.example

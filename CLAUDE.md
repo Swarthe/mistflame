@@ -3,6 +3,11 @@
 ## Checks
 - Typecheck: `npx tsc --noEmit`
 - No test suite. Verify changes manually via `npm run preview`.
+- `wrangler.toml` and `workers/email-receiver/wrangler.toml` are gitignored. Copy from the `.example` files before running preview:
+  ```
+  cp wrangler.toml.example wrangler.toml
+  cp workers/email-receiver/wrangler.toml.example workers/email-receiver/wrangler.toml
+  ```
 
 ## Stack constraints
 - Next.js 16 App Router, deployed on Cloudflare Workers via `@opennextjs/cloudflare`.

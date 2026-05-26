@@ -17,11 +17,18 @@ Workers via [OpenNext](https://opennext.js.org/cloudflare).
 
 ```bash
 npm install
-cp .dev.vars.example .dev.vars    # fill in values
+cp wrangler.toml.example wrangler.toml                                       # fill in IDs
+cp workers/email-receiver/wrangler.toml.example workers/email-receiver/wrangler.toml
+cp .dev.vars.example .dev.vars                                               # fill in values
 npm run dev                       # local Next.js dev server (no CF bindings)
 npm run preview                   # Cloudflare Workers preview with local binding simulators
 npm run preview:remote            # Cloudflare Workers preview against real remote bindings
 ```
+
+`wrangler.toml` and `workers/email-receiver/wrangler.toml` are gitignored so that
+deployment-specific IDs are not committed. `wrangler.toml.example` is the
+tracked template — copy it once and fill in the IDs from the Cloudflare setup
+steps below.
 
 ## Deployment
 
