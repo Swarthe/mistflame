@@ -24,6 +24,8 @@ All branding and addresses are set via Cloudflare `[vars]` in `wrangler.toml` (n
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
 | `SESSION_TTL_HOURS` | Session token lifetime in hours (default `24`) |
 | `NOTIFY_ADDRS` | Comma-separated addresses to notify on inbound email (empty = disabled); set in both `wrangler.toml` and `workers/email-receiver/wrangler.toml` |
+| `RATE_LIMIT_MAX` | Soft limit on inbound emails per window (`0` = disabled); set in `workers/email-receiver/wrangler.toml` — requires `KV` binding. Enforced via a KV counter (read-increment-write), so burst races can exceed the limit slightly; effective against sustained spam |
+| `RATE_LIMIT_WINDOW_MINUTES` | Window length in minutes for the rate limit (default `60`) |
 | `PASSWORD` | Secret — login password |
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in values.

@@ -15,5 +15,14 @@ bucket_name = "mistflame-attachments"
 [[send_email]]
 name = "EMAIL_SENDER"
 
+[[kv_namespaces]]
+binding = "KV"
+id = "YOUR_KV_NAMESPACE_ID"
+preview_id = "local-rate-limit"
+
 [vars]
 NOTIFY_ADDRS = ""
+# Maximum inbound emails accepted in the time window (0 = disabled).
+RATE_LIMIT_MAX = "30"
+# Time window in minutes.
+RATE_LIMIT_WINDOW_MINUTES = "60"

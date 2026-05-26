@@ -120,6 +120,8 @@ changes needed to customise the app for a new deployment.
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
 | `SESSION_TTL_HOURS` | `"24"` | Session token lifetime in hours |
 | `NOTIFY_ADDRS` | `""` | Comma-separated list of addresses to email when a new inbound message arrives; leave empty to disable |
+| `RATE_LIMIT_MAX` | `"0"` | Soft limit on inbound emails per window (`0` = disabled); requires a `KV` binding on the email receiver worker. Enforced via a KV counter — not a hard guarantee, but effective against sustained spam |
+| `RATE_LIMIT_WINDOW_MINUTES` | `"60"` | Window length in minutes for the rate limit |
 
 ### Bindings
 
@@ -129,6 +131,7 @@ changes needed to customise the app for a new deployment.
 | `SESSION` | KV Namespace | Active session token (1-day TTL) |
 | `ATTACHMENTS` | R2 Bucket | Inbound and outbound email attachments |
 | `EMAIL_SENDER` | Send Email | Outbound email via Cloudflare Email Workers |
+| `KV` | KV Namespace | Rate limit counters (email receiver only; can share the `SESSION` namespace) |
 | `PASSWORD` | Secret | Login password |
 
 For local development, set these in `.dev.vars` (see `.dev.vars.example`).
@@ -149,7 +152,7 @@ Secrets are never stored in config files.
   to prevent brute force:
   - Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
   - Field: URI Path starts with `/api`, Method: any
-  - Threshold: 10 requests per 10 seconds per IP
+  - Threshold: 20 requests per 10 seconds per IP
   - Action: Block, Duration: 10 seconds
 
 ## Features

@@ -4,7 +4,10 @@ interface Env {
     DB: D1Database;
     ATTACHMENTS: R2Bucket;
     EMAIL_SENDER: SendEmail;
+    KV?: KVNamespace;
     NOTIFY_ADDRS?: string;
+    RATE_LIMIT_MAX?: string;
+    RATE_LIMIT_WINDOW_MINUTES?: string;
 }
 
 const generateMessageId = (domain: string) =>
@@ -12,6 +15,48 @@ const generateMessageId = (domain: string) =>
 
 export default {
     async email(message: ForwardableEmailMessage, env: Env) {
+        const rateMax = parseInt(env.RATE_LIMIT_MAX ?? '0', 10);
+        if (rateMax > 0 && env.KV) {
+            const windowMinutes = parseInt(env.RATE_LIMIT_WINDOW_MINUTES ?? '60', 10);
+            const bucket = Math.floor(Date.now() / (windowMinutes * 60_000));
+            const kvKey = `rate:inbound:${bucket}`;
+            const ttl = windowMinutes * 2 * 60;
+            const current = parseInt(await env.KV.get(kvKey) ?? '0', 10);
+            if (current >= rateMax) {
+                const warnKey = `rate:warned:${bucket}`;
+                const alreadyWarned = await env.KV.get(warnKey);
+                if (!alreadyWarned) {
+                    await env.KV.put(warnKey, '1', { expirationTtl: ttl });
+                    const notifyAddrs = (env.NOTIFY_ADDRS ?? '').split(',').map(a => a.trim()).filter(Boolean);
+                    if (notifyAddrs.length > 0) {
+                        const from = message.to.toLowerCase();
+                        const fromDomain = from.split('@')[1] ?? 'localhost';
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        const cfEmail = await import(('cloudflare' + ':email') as any);
+                        for (const addr of notifyAddrs) {
+                            const warnRaw = [
+                                `From: <${from}>`,
+                                `To: <${addr}>`,
+                                `Message-ID: <${generateMessageId(fromDomain)}>`,
+                                'Subject: Inbound rate limit reached',
+                                'MIME-Version: 1.0',
+                                'Content-Type: text/plain; charset=UTF-8',
+                                '',
+                                `The inbound email rate limit has been reached. Further emails will be discarded until the next window.`,
+                                '',
+                                `Limit: ${rateMax} emails per ${windowMinutes} minutes`,
+                            ].join('\r\n');
+                            try {
+                                await env.EMAIL_SENDER.send(new cfEmail.EmailMessage(from, addr, warnRaw));
+                            } catch { /* ignore */ }
+                        }
+                    }
+                }
+                return;
+            }
+            await env.KV.put(kvKey, String(current + 1), { expirationTtl: ttl });
+        }
+
         const rawBuffer = await new Response(message.raw).arrayBuffer();
         const parsed = await new PostalMime().parse(rawBuffer);
 
