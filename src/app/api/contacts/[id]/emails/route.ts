@@ -46,14 +46,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (isNaN(contactId)) return Response.json({ ok: false, error: 'Invalid ID.' }, { status: 400 });
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    const sender = body?.sender === undefined ? undefined : (body.sender === null ? null : String(body.sender));
+    const sender = typeof body?.sender === 'string' ? body.sender : null;
     const subject = body?.subject ?? null;
     const emailBody = body?.body;
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
     const rawParentId = body?.parent_id;
 
-    if (sender === undefined) {
-        return Response.json({ ok: false, error: 'sender is required (null for contact, address string for mistflame).' }, { status: 400 });
+    if (!sender) {
+        return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
     }
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
         return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
@@ -67,11 +67,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     try {
         const { env } = await getCloudflareContext({ async: true });
 
-        if (sender !== null) {
-            const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
-            if (!validAddrs.includes(sender)) {
-                return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
-            }
+        const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
+        if (!validAddrs.includes(sender)) {
+            return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
         }
 
         if (parent_id !== null) {
@@ -117,6 +115,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 sent_at: null,
                 subject,
                 body: emailBody.trim(),
+                recipient: null,
                 cc,
             },
         }, { status: 201 });

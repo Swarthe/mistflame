@@ -41,6 +41,7 @@ export async function middleware(request: NextRequest) {
     const response = NextResponse.next();
     if (!pathname.startsWith('/api/')) {
         response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+        response.headers.set('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'");
     }
     response.headers.set('X-Content-Type-Options', 'nosniff');
     response.headers.set('X-Frame-Options', 'DENY');

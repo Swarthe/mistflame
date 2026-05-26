@@ -15,22 +15,20 @@ export async function PATCH(
     const subject = body?.subject ?? null;
     const emailBody = body?.body;
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
-    const sender = body?.sender === undefined ? undefined : (body.sender === null ? null : String(body.sender));
+    const sender = typeof body?.sender === 'string' ? body.sender : null;
 
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
         return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
     }
-    if (sender === undefined) {
+    if (!sender) {
         return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
     }
 
     const { env } = await getCloudflareContext({ async: true });
 
-    if (sender !== null) {
-        const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
-        if (!validAddrs.includes(sender)) {
-            return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
-        }
+    const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
+    if (!validAddrs.includes(sender)) {
+        return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
     }
 
     const result = await env.DB
