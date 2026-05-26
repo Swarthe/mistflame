@@ -103,25 +103,27 @@ export default {
         const preview = bodyText.length > 500 ? bodyText.slice(0, 500) + `\n\n[+${bodyText.length - 500} characters]` : bodyText;
         const displayFrom = contact.name !== fromEmail ? `${contact.name} <${fromEmail}>` : fromEmail;
 
-        const notifyRaw = [
-            `From: <${recipient}>`,
-            `Message-ID: <${generateMessageId(recipient.split('@')[1] ?? 'localhost')}>`,
-            `Subject: New message from ${displayFrom.replace(/[\r\n]/g, '')}`,
-            'MIME-Version: 1.0',
-            'Content-Type: text/plain; charset=UTF-8',
-            '',
-            `From:    ${displayFrom}`,
-            `To:      ${recipient}`,
-            `Subject: ${safeSubject}`,
-            '',
-            '---',
-            '',
-            preview,
-        ].join('\r\n');
-
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cfEmail = await import(('cloudflare' + ':email') as any);
+        const notifySubject = `New message from ${displayFrom.replace(/[\r\n]/g, '')}`;
+        const notifyDomain = recipient.split('@')[1] ?? 'localhost';
         for (const addr of notifyAddrs) {
+            const notifyRaw = [
+                `From: <${recipient}>`,
+                `To: <${addr}>`,
+                `Message-ID: <${generateMessageId(notifyDomain)}>`,
+                `Subject: ${notifySubject}`,
+                'MIME-Version: 1.0',
+                'Content-Type: text/plain; charset=UTF-8',
+                '',
+                `From:    ${displayFrom}`,
+                `To:      ${recipient}`,
+                `Subject: ${safeSubject}`,
+                '',
+                '---',
+                '',
+                preview,
+            ].join('\r\n');
             try {
                 await env.EMAIL_SENDER.send(new cfEmail.EmailMessage(recipient, addr, notifyRaw));
             } catch { /* notification failure must not affect inbound processing */ }
