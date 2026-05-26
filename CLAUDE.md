@@ -42,6 +42,11 @@ For local development, copy `.dev.vars.example` to `.dev.vars` and fill in value
 - D1 (SQLite). FK constraints declared in `schema.sql` but **not enforced at runtime** — cascading deletes are done manually in route handlers.
 - Schema changes: `npx wrangler d1 execute mistflame-db --remote --file <file>` for SQL files, or `--command "ALTER TABLE ..."` for single statements (e.g. `ALTER TABLE email DROP COLUMN thread_id`). `--remote` for local deployments.
 
+## Email composition
+- Manually added emails and replies are always outgoing (mistflame sender). There is no option to add a contact-type (inbound) email manually.
+- The `+ Reply` button is only shown on inbound emails (`sender IS NULL`). Replies are always sent as mistflame.
+- When replying, the sender address is locked to the address that originally received the inbound email.
+
 ## Email data model
 The `email` table uses two columns to encode email state — get these wrong and everything breaks:
 

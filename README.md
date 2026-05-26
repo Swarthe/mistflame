@@ -169,8 +169,9 @@ Secrets are never stored in config files.
 
 **Sending**
 - Send all pending drafts at once, or send individual emails inline
-- Choose sender address per send
-- Attachments (up to 10 MB each) are fetched from R2 and sent as `multipart/mixed`
+- Choose sender address per send; attachments supported (up to 10 MB each, sent as `multipart/mixed`)
+- All manually composed emails and replies are outgoing (mistflame sender) — inbound emails can only arrive via the email receiver worker
+- Reply is only available on inbound emails; the sender address is locked to the address that received the inbound
 
 **Receiving**
 - Inbound emails matched to contacts by sender address

@@ -259,7 +259,6 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
     const isUs = email.sender !== null;
     const [editing, setEditing] = useState(false);
     useEffect(() => { onEditingChange(editing); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
-    const [editSenderType, setEditSenderType] = useState<'mistflame' | 'contact'>(isUs ? 'mistflame' : 'contact');
     const [editSenderAddr, setEditSenderAddr] = useState(email.sender ?? sendAddrs[0] ?? '');
     const [editSubject, setEditSubject] = useState(email.subject ?? '');
     const [editBody, setEditBody] = useState(email.body);
@@ -287,12 +286,7 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
     };
 
     const senderLocked = isUs && !senderEditable;
-    const senderTypeLocked = senderLocked || email.parent_id !== null;
-    const editSender = senderLocked
-        ? threadSender
-        : senderTypeLocked
-            ? (isUs ? (editSenderAddr || null) : null)
-            : (editSenderType === 'mistflame' ? (editSenderAddr || null) : null);
+    const editSender = senderLocked ? threadSender : (editSenderAddr || null);
 
     const saveEdit = async () => {
         setEditSaving(true);
@@ -306,7 +300,6 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
 
     const cancelEdit = () => {
         setEditing(false);
-        setEditSenderType(isUs ? 'mistflame' : 'contact');
         setEditSenderAddr(email.sender ?? sendAddrs[0] ?? '');
         setEditSubject(email.subject ?? '');
         setEditBody(email.body);
@@ -323,7 +316,7 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
         }
     };
 
-    const displayIsUs = editing ? (senderTypeLocked ? isUs : editSenderType === 'mistflame') : isUs;
+    const displayIsUs = isUs;
     const cardCls = `flex flex-col gap-2 p-4 border ${displayIsUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}`;
 
     if (editing) {
@@ -331,22 +324,12 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
             <div className={`${cardCls} gap-3`}>
                 <div className="flex flex-col gap-1">
                     <div className="flex gap-2 items-center">
-                        {senderTypeLocked ? (
-                            <div className="w-28 shrink-0 text-sm font-sans text-white/50 border border-white/10 bg-white/[0.04] px-3 py-2.5">{isUs ? senderName : 'Contact'}</div>
+                        {senderLocked ? (
+                            <div className="w-48 shrink-0 text-sm font-sans text-white/35 border border-white/10 bg-white/[0.04] px-3 py-2.5">{threadSender}</div>
                         ) : (
-                            <select className="w-28 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={editSenderType} onChange={e => setEditSenderType(e.target.value as 'mistflame' | 'contact')}>
-                                <option value="mistflame" style={{ color: 'white' }}>{senderName}</option>
-                                <option value="contact" style={{ color: 'white' }}>Contact</option>
+                            <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={editSenderAddr} onChange={e => setEditSenderAddr(e.target.value)}>
+                                {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
                             </select>
-                        )}
-                        {displayIsUs && (
-                            senderLocked ? (
-                                <div className="w-48 shrink-0 text-sm font-sans text-white/35 border border-white/10 bg-white/[0.04] px-3 py-2.5">{threadSender}</div>
-                            ) : (
-                                <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={editSenderAddr} onChange={e => setEditSenderAddr(e.target.value)}>
-                                    {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
-                                </select>
-                            )
                         )}
                         <div className="flex-[1_1_160px] min-w-0 overflow-hidden">
                             <input
@@ -421,7 +404,7 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
                     {email.sent_at === null && (
                         <button className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans" onClick={() => setEditing(true)}>Edit</button>
                     )}
-                    <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>
+                    {!isUs && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>}
                     <button className={btnDanger} onClick={onDelete} title="Delete email">✕</button>
                 </div>
             </div>
@@ -458,13 +441,10 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
     onSave: (sender: string | null, subject: string, body: string, cc: string, files: File[]) => void;
     onCancel: () => void;
 }) {
-    const replyAsType: 'mistflame' | 'contact' = replyTo ? (replyTo.sender !== null ? 'contact' : 'mistflame') : 'mistflame';
-    // When replying to an inbound email with no prior outgoing emails in the thread,
-    // lock the sender to the address that received the inbound email.
+    // When replying, lock the sender to the address that received the inbound email.
     const effectiveThreadSender = threadSender ?? (replyTo?.sender === null ? replyTo.recipient : null) ?? null;
     const replyAsSender = effectiveThreadSender ?? sendAddrs[0] ?? '';
     const initialSubject = replyTo?.subject ? `Re: ${replyTo.subject.replace(/^(Re:\s*)+/i, '')}` : '';
-    const [senderType, setSenderType] = useState<'mistflame' | 'contact'>(replyAsType);
     const [senderAddr, setSenderAddr] = useState(replyAsSender);
     const [subject, setSubject] = useState(initialSubject);
     const [cc, setCc] = useState(replyTo?.cc ?? '');
@@ -473,11 +453,10 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const isUs = senderType === 'mistflame';
-    const addrLocked = isUs && effectiveThreadSender !== null;
+    const addrLocked = effectiveThreadSender !== null;
     const effectiveAddr = addrLocked ? effectiveThreadSender! : senderAddr;
-    const sender = isUs ? (effectiveAddr || null) : null;
-    const cardCls = `flex flex-col gap-3 p-4 border ${isUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}`;
+    const sender = effectiveAddr || null;
+    const cardCls = 'flex flex-col gap-3 p-4 border ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]';
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -491,21 +470,13 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
             {replyTo && <ReplyPreview email={replyTo} contactName={contactName} senderName={senderName} />}
             <div className="flex flex-col gap-1">
                 <div className="flex gap-2 items-center">
-                    {replyTo ? (
-                        <span className="w-28 shrink-0 text-sm font-sans text-white/50 flex items-center justify-center border border-white/10 bg-white/[0.04] px-3 py-2.5">{isUs ? senderName : 'Contact'}</span>
-                    ) : (
-                        <select className="w-28 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={senderType} onChange={e => setSenderType(e.target.value as 'mistflame' | 'contact')}>
-                            <option value="mistflame" style={{ color: 'white' }}>{senderName}</option>
-                            <option value="contact" style={{ color: 'white' }}>Contact</option>
-                        </select>
-                    )}
-                    {isUs && (addrLocked ? (
+                    {addrLocked ? (
                         <span className="w-48 shrink-0 text-sm font-sans text-white/35 flex items-center border border-white/10 bg-white/[0.04] px-3 py-2.5">{effectiveThreadSender}</span>
                     ) : (
                         <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={senderAddr} onChange={e => setSenderAddr(e.target.value)}>
                             {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
                         </select>
-                    ))}
+                    )}
                     <div className="flex-[1_1_160px] min-w-0 overflow-hidden">
                         <input
                             className={inputCls}
@@ -526,24 +497,22 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
                 value={body}
                 onChange={e => setBody(e.target.value)}
             />
-            {isUs && (
-                <div className="flex flex-wrap items-center gap-2">
-                    {pendingFiles.map((file, idx) => (
-                        <div key={idx} className="flex items-center gap-1.5 text-xs text-white/60 bg-white/5 border border-white/10 px-2 py-1 font-sans">
-                            <span>{file.name}</span>
-                            <span className="text-white/35">{formatSize(file.size)}</span>
-                            <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))} className="text-white/30 hover:text-red-400 transition-colors cursor-pointer ml-0.5 leading-none">✕</button>
-                        </div>
-                    ))}
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans"
-                    >
-                        Attach
-                    </button>
-                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
-                </div>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+                {pendingFiles.map((file, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5 text-xs text-white/60 bg-white/5 border border-white/10 px-2 py-1 font-sans">
+                        <span>{file.name}</span>
+                        <span className="text-white/35">{formatSize(file.size)}</span>
+                        <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))} className="text-white/30 hover:text-red-400 transition-colors cursor-pointer ml-0.5 leading-none">✕</button>
+                    </div>
+                ))}
+                <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans"
+                >
+                    Attach
+                </button>
+                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+            </div>
             <div className="flex gap-2">
                 <button className={btnPrimary} onClick={() => onSave(sender, subject, body, cc, pendingFiles)} disabled={saving || !body.trim() || !!ccError}>
                     {saving ? 'Saving…' : 'Add Email'}
