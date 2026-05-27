@@ -135,6 +135,10 @@ addresses to `SEND_ADDRS` (comma-separated) to send from different domains.
 
 ### 6. Security
 
+Mistflame serves `robots.txt` with `Disallow: /` for all user agents, and sets
+`X-Robots-Tag: noindex, nofollow` on all HTML responses via `middleware.ts`.
+This prevents search engines and crawlers from indexing the app.
+
 **Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force
 attacks:
 
