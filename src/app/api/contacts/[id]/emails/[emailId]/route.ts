@@ -20,6 +20,12 @@ export async function PATCH(
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
         return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
     }
+    if (emailBody.length > 100_000) {
+        return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
+    }
+    if (typeof subject === 'string' && subject.length > 500) {
+        return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
+    }
     if (!sender) {
         return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
     }

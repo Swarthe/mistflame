@@ -101,5 +101,13 @@ On HTML page responses (non-`/api/` routes) it additionally sets:
 
 Do not tighten `script-src` to remove `'unsafe-inline'` without first implementing nonce-based CSP; Next.js injects inline scripts for hydration.
 
+## Input limits
+- Email body: 100,000 characters (enforced in POST and PATCH handlers)
+- Email subject: 500 characters (enforced in POST and PATCH handlers)
+- Inbound attachments: 10 MB per file; oversized attachments are silently dropped in the email receiver before the R2 write
+
+## Password comparison
+`/api/auth` uses a manual XOR-reduce constant-time comparison (`a[i] ^ b[i]` accumulated into a single `diff`) to avoid leaking password length or content via timing. Do not replace with a plain `===` comparison.
+
 ## Client fetch pattern
 All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined inside `OutreachPage`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).

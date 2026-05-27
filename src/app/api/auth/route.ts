@@ -17,7 +17,13 @@ export async function POST(request: Request) {
     const ttlHours = Math.max(1, parseInt(env.SESSION_TTL_HOURS ?? '24', 10) || 24);
     const kvTtl = ttlHours * 60 * 60;
 
-    if (password !== (env.PASSWORD ?? '')) {
+    const encoder = new TextEncoder();
+    const a = encoder.encode(password);
+    const b = encoder.encode(env.PASSWORD ?? '');
+    let diff = a.length ^ b.length;
+    const len = Math.min(a.length, b.length);
+    for (let i = 0; i < len; i++) diff |= a[i] ^ b[i];
+    if (diff !== 0) {
         return Response.json({ ok: false, error: 'Incorrect password.' }, { status: 401 });
     }
 

@@ -139,6 +139,13 @@ Mistflame serves `robots.txt` with `Disallow: /` for all user agents, and sets
 `X-Robots-Tag: noindex, nofollow` on all HTML responses via `middleware.ts`.
 This prevents search engines and crawlers from indexing the app.
 
+The login endpoint (`/api/auth`) uses a constant-time comparison for password
+verification to prevent timing-based enumeration.
+
+Inbound email attachments are capped at 10 MB each; oversized attachments are
+silently dropped. Draft and sent email bodies are limited to 100,000 characters
+and subjects to 500 characters.
+
 **Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force
 attacks:
 

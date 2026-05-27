@@ -58,6 +58,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
         return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
     }
+    if (emailBody.length > 100_000) {
+        return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
+    }
+    if (typeof subject === 'string' && subject.length > 500) {
+        return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
+    }
 
     const parent_id = rawParentId != null ? parseInt(String(rawParentId), 10) : null;
     if (parent_id !== null && isNaN(parent_id)) {

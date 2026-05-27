@@ -123,6 +123,7 @@ export default {
             const contentType = att.mimeType ?? 'application/octet-stream';
             const r2Key = `${emailId}/${crypto.randomUUID()}-${filename}`;
             const data = att.content instanceof Uint8Array ? att.content : new Uint8Array(att.content as ArrayBuffer);
+            if (data.byteLength > 10 * 1024 * 1024) continue;
             await env.ATTACHMENTS.put(r2Key, data, {
                 httpMetadata: { contentType },
             });
