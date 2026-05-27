@@ -86,7 +86,7 @@ export default {
 
         let parentId: number | null = null;
 
-        // 1. Match by In-Reply-To (works after first reply backfills the rewritten ID)
+        // 1. Match by In-Reply-To against stored message_id (set at send time)
         if (inReplyTo) {
             const parent = await env.DB
                 .prepare('SELECT id FROM email WHERE message_id = ? AND contact_id = ?')
@@ -95,7 +95,7 @@ export default {
             if (parent) parentId = parent.id;
         }
 
-        // 2. Subject fallback: strip Re:/Fwd: prefixes and match against sent email subjects
+        // 2. Subject fallback for contacts replying without In-Reply-To or with no match
         if (parentId === null && subject) {
             const normalised = subject.replace(/^(Re:\s*|Fwd?:\s*)+/gi, '').trim();
             if (normalised) {
@@ -105,14 +105,6 @@ export default {
                     .first<{ id: number }>();
                 if (parent) parentId = parent.id;
             }
-        }
-
-        // Backfill the rewritten Message-ID so future In-Reply-To matches work
-        if (parentId !== null && inReplyTo) {
-            await env.DB
-                .prepare('UPDATE email SET message_id = ? WHERE id = ? AND message_id != ?')
-                .bind(inReplyTo, parentId, inReplyTo)
-                .run();
         }
 
         const recipient = message.to.toLowerCase();
