@@ -54,7 +54,22 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 
 ## Database
 - D1 (SQLite). FK constraints declared in `schema.sql` but **not enforced at runtime**; cascading deletes are done manually in route handlers.
-- Schema changes: `npx wrangler d1 execute mistflame-db --remote --file <file>` for SQL files, or `--command "ALTER TABLE ..."` for single statements (e.g. `ALTER TABLE contact ADD COLUMN notes TEXT`). Use `--local` instead of `--remote` for local dev databases.
+- Schema changes (remote): `npx wrangler d1 execute mistflame-db --remote --file <file>` for SQL files, or `--command "ALTER TABLE ..."` for single statements.
+- **Local D1 commands** (use the binding name `DB`, not the database name; all commands run from the mistflame directory):
+  ```
+  # Apply schema to local dev database
+  npx wrangler d1 execute DB --local --file schema.sql
+
+  # Run an arbitrary query
+  npx wrangler d1 execute DB --local --command "SELECT * FROM contact"
+
+  # Run a SQL file (e.g. seed data)
+  npx wrangler d1 execute DB --local --file seed-local.sql
+
+  # Reset all data
+  npx wrangler d1 execute DB --local --command "DELETE FROM email; DELETE FROM contact; DELETE FROM tag; DELETE FROM contact_tag; DELETE FROM sqlite_sequence WHERE name IN ('email','contact','tag');"
+  ```
+- Local state is stored in `.wrangler/state/v3/d1/` (gitignored). Delete this directory to fully reset the local database.
 
 ## Tags
 - Tags are case-insensitively normalised on both sides:
@@ -66,6 +81,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 - Manually added emails and replies are always outgoing (mistflame sender). There is no option to add a contact-type (inbound) email manually.
 - The `+ Reply` button is only shown on inbound emails (`sender IS NULL`). Replies are always sent as mistflame.
 - When replying, the sender address is locked to the address that originally received the inbound email.
+- Reply drafts are composed without quoted text in the body. At send time, `send-emails/route.ts` appends the quoted parent body to both the outgoing email and the stored DB body. The thread view collapses quoted sections behind a `···` toggle button (`splitQuote` in `page.tsx` detects the `\n\nOn ... wrote:` boundary); inbound emails from contacts are handled the same way if their client includes quoted text.
 - The POST and PATCH endpoints for emails reject `sender: null`; null senders are only written by the email receiver worker directly via D1, not via the API.
 
 ## Email data model
@@ -80,6 +96,8 @@ The `email` table uses two columns to encode email state; get these wrong and ev
 - There is no stored `thread_id` column. Thread grouping is computed at query time via a recursive CTE over `parent_id`: each email walks up to its root (`parent_id IS NULL`), and threads are numbered with `DENSE_RANK() OVER (ORDER BY root_id)`. The client still receives a `thread_id` field; it is computed, not stored.
 - `awaiting_reply` on the contact is **computed** in the SQL query (not a stored column). It is true when any inbound email (`sender IS NULL`) for that contact has no child replies.
 - Outbound emails have their `message_id` generated and stored in the DB at send time (`send-emails/route.ts`), so inbound `In-Reply-To` lookups match directly. A subject-line fallback handles contacts replying without a matching `In-Reply-To`.
+- `In-Reply-To` parsing extracts the first `<...>` block via regex rather than stripping outer angle brackets, to handle headers that contain multiple message IDs.
+- The subject fallback matches against both the bare normalised subject and `'Re: ' || normalised`, because outbound reply subjects are stored with the "Re: " prefix applied by the UI.
 
 ## Email worker
 - The email receiver (`email-receiver/index.ts`) is a **separate worker** with its own `wrangler.toml`. `npm run deploy` does not redeploy it.
@@ -88,6 +106,7 @@ The `email` table uses two columns to encode email state; get these wrong and ev
 ## Shared constants
 - `isValidEmail` is exported from `src/app/api/contacts/route.ts` for server-side use. It is also defined inline in `page.tsx` for client-side use; this duplication is intentional (different environments); do not consolidate.
 - `SEND_ADDRS` is **not** a shared constant; it comes from `env.SEND_ADDRS` at runtime (server) or `/api/config` (client).
+- `ORG_NAME` follows the same pattern: `env.ORG_NAME` on the server; `/api/config` (as `orgName`) on the client. The `orgName` local variable in `OutreachPage` and the `orgName` prop passed to `EmailCard`/`NewEmailCard` fall back to `'Mistflame'` when the env var is empty.
 
 ## Security headers
 `middleware.ts` sets the following headers on every response:

@@ -92,6 +92,16 @@ function formatDate(iso: string): string {
     }
 }
 
+function splitQuote(body: string): { main: string; quote: string | null } {
+    const normalised = body.replace(/\r\n/g, '\n');
+    const match = normalised.match(/\n\nOn .+? wrote:/);
+    if (!match || match.index === undefined) return { main: normalised.trimEnd(), quote: null };
+    return {
+        main: normalised.slice(0, match.index).trimEnd(),
+        quote: normalised.slice(match.index + 2).trimEnd(),
+    };
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function TagChip({ tag, onRemove }: { tag: { name: string; color: string }; onRemove?: () => void }) {
@@ -210,8 +220,8 @@ function ContactForm({ value, onChange, onSave, onCancel, saving, saveError }: {
     );
 }
 
-function ReplyPreview({ email, contactName, senderName }: { email: EmailRecord; contactName: string; senderName: string }) {
-    const sender = email.sender !== null ? senderName : contactName;
+function ReplyPreview({ email, contactName, orgName }: { email: EmailRecord; contactName: string; orgName: string }) {
+    const sender = email.sender !== null ? orgName : contactName;
     const preview = email.body.length > 80 ? email.body.slice(0, 80) + '…' : email.body;
     return (
         <div className="border-l-2 border-white/25 pl-2 mb-1">
@@ -240,11 +250,11 @@ function AttachmentChip({ att, href, onDelete }: {
     );
 }
 
-function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, threadSender, senderEditable, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
+function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, threadSender, senderEditable, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
     email: EmailRecord;
     contactName: string;
     parentEmail?: EmailRecord | null;
-    senderName: string;
+    orgName: string;
     sendAddrs: string[];
     threadSender: string | null;
     senderEditable: boolean;
@@ -268,6 +278,7 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
     const [sending, setSending] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
+    const [quoteExpanded, setQuoteExpanded] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -384,12 +395,14 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
         );
     }
 
+    const { main: bodyMain, quote: bodyQuote } = splitQuote(email.body);
+
     return (
         <div className={cardCls}>
-            {parentEmail && <ReplyPreview email={parentEmail} contactName={contactName} senderName={senderName} />}
+            {parentEmail && <ReplyPreview email={parentEmail} contactName={contactName} orgName={orgName} />}
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-baseline gap-2 min-w-0">
-                    <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? senderName : contactName}</span>
+                    <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? orgName : contactName}</span>
                     {isUs && email.sender && <span className="text-xs text-white/35 font-sans truncate">{email.sender}</span>}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
@@ -414,7 +427,19 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
             {email.subject && !email.parent_id && (
                 <div className="text-xs text-white/45 font-sans">{email.subject}</div>
             )}
-            <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{email.body}</p>
+            <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{bodyMain}</p>
+            {bodyQuote !== null && (
+                <div className="mt-1">
+                    <button
+                        onClick={() => setQuoteExpanded(v => !v)}
+                        className={`text-xs px-1.5 py-0.5 border transition-colors cursor-pointer font-sans ${quoteExpanded ? 'text-white/70 border-white/45' : 'text-white/40 hover:text-white/65 border-white/25 hover:border-white/45'}`}
+                        title={quoteExpanded ? 'Hide quoted text' : 'Show quoted text'}
+                    >···</button>
+                    {quoteExpanded && (
+                        <p className="text-sm text-white/45 whitespace-pre-wrap leading-relaxed font-sans mt-2 border-l-2 border-white/20 pl-3">{bodyQuote}</p>
+                    )}
+                </div>
+            )}
             {email.attachments.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 pt-1">
                     {email.attachments.map(att => (
@@ -431,10 +456,10 @@ function EmailCard({ email, contactName, parentEmail, senderName, sendAddrs, thr
     );
 }
 
-function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSender, saving, onSave, onCancel }: {
+function NewEmailCard({ replyTo, contactName, orgName, sendAddrs, threadSender, saving, onSave, onCancel }: {
     replyTo: EmailRecord | null;
     contactName: string;
-    senderName: string;
+    orgName: string;
     sendAddrs: string[];
     threadSender: string | null;
     saving: boolean;
@@ -467,7 +492,7 @@ function NewEmailCard({ replyTo, contactName, senderName, sendAddrs, threadSende
 
     return (
         <div className={cardCls}>
-            {replyTo && <ReplyPreview email={replyTo} contactName={contactName} senderName={senderName} />}
+            {replyTo && <ReplyPreview email={replyTo} contactName={contactName} orgName={orgName} />}
             <div className="flex flex-col gap-1">
                 <div className="flex gap-2 items-center">
                     {addrLocked ? (
@@ -561,7 +586,7 @@ export default function OutreachPage() {
     const [sendResult, setSendResult] = useState<{ sent: number; failed: number; errors: string[] } | null>(null);
 
     const selectedContact = contacts.find(c => c.id === selectedId) ?? null;
-    const senderName = config?.orgName || 'Mistflame';
+    const orgName = config?.orgName || 'Mistflame';
     const sendAddrs = config?.sendAddrs ?? [];
     const searchTrimmed = searchQuery.trim();
     const filteredContacts = contacts.filter(c => {
@@ -1150,7 +1175,7 @@ export default function OutreachPage() {
                                                         email={email}
                                                         contactName={selectedContact.name}
                                                         parentEmail={email.parent_id != null ? emailById.get(email.parent_id) : null}
-                                                        senderName={senderName}
+                                                        orgName={orgName}
                                                         sendAddrs={sendAddrs}
                                                         threadSender={threadSender}
                                                         senderEditable={email.sender !== null && outgoingInThread.length === 1 && !replyIds.has(email.id)}
@@ -1168,7 +1193,7 @@ export default function OutreachPage() {
                                                         <NewEmailCard
                                                             replyTo={replyToEmail}
                                                             contactName={selectedContact.name}
-                                                            senderName={senderName}
+                                                            orgName={orgName}
                                                             sendAddrs={sendAddrs}
                                                             threadSender={threadSender}
                                                             saving={saving}
@@ -1189,7 +1214,7 @@ export default function OutreachPage() {
                                             <NewEmailCard
                                                 replyTo={null}
                                                 contactName={selectedContact.name}
-                                                senderName={senderName}
+                                                orgName={orgName}
                                                 sendAddrs={sendAddrs}
                                                 threadSender={null}
                                                 saving={saving}

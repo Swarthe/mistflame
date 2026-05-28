@@ -62,7 +62,10 @@ export default {
 
         const fromEmail = message.from.toLowerCase();
         const msgId = parsed.messageId ? parsed.messageId.replace(/^<|>$/g, '').trim() : null;
-        const inReplyTo = parsed.inReplyTo ? parsed.inReplyTo.replace(/^<|>$/g, '').trim() : null;
+        const rawInReplyTo = parsed.inReplyTo?.trim() ?? null;
+        const inReplyTo = rawInReplyTo
+            ? (rawInReplyTo.match(/<([^>]+)>/) ?? [])[1] ?? rawInReplyTo
+            : null;
         const subject = parsed.subject ?? null;
         const body = parsed.text ?? parsed.html ?? '';
 
@@ -95,13 +98,15 @@ export default {
             if (parent) parentId = parent.id;
         }
 
-        // 2. Subject fallback for contacts replying without In-Reply-To or with no match
+        // 2. Subject fallback for contacts replying without In-Reply-To or with no match.
+        // Match against both the bare normalised subject and the "Re: <normalised>" form,
+        // since outbound reply subjects are stored with the "Re: " prefix already applied.
         if (parentId === null && subject) {
             const normalised = subject.replace(/^(Re:\s*|Fwd?:\s*)+/gi, '').trim();
             if (normalised) {
                 const parent = await env.DB
-                    .prepare('SELECT id FROM email WHERE contact_id = ? AND sender IS NOT NULL AND subject = ? ORDER BY id DESC LIMIT 1')
-                    .bind(contact.id, normalised)
+                    .prepare("SELECT id FROM email WHERE contact_id = ? AND sender IS NOT NULL AND (subject = ? OR subject = 'Re: ' || ?) ORDER BY id DESC LIMIT 1")
+                    .bind(contact.id, normalised, normalised)
                     .first<{ id: number }>();
                 if (parent) parentId = parent.id;
             }

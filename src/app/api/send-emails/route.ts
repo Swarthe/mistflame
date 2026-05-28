@@ -8,6 +8,8 @@ interface PendingEmail {
     cc: string | null;
     parent_id: number | null;
     parent_message_id: string | null;
+    parent_body: string | null;
+    parent_sent_at: string | null;
     contact_name: string;
     contact_email: string;
 }
@@ -106,6 +108,7 @@ export async function POST(request: Request) {
     const baseQuery = `
         SELECT e.id, e.sender, e.subject, e.body, e.cc, e.parent_id,
                p.message_id AS parent_message_id,
+               p.body AS parent_body, p.sent_at AS parent_sent_at,
                c.name AS contact_name, c.email AS contact_email
         FROM email e
         JOIN contact c ON e.contact_id = c.id
@@ -153,7 +156,21 @@ export async function POST(request: Request) {
             const msgId = generateMessageId(fromDomain);
             const safeName = email.contact_name.replace(/[<>\\\r\n]/g, '');
             const safeSubject = (email.subject ?? '(no subject)').replace(/[\r\n]/g, ' ');
-            const bodyNormalised = email.body.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+            let bodyNormalised = email.body.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+            let bodyForStorage: string | null = null;
+            if (email.parent_body !== null) {
+                const when = email.parent_sent_at
+                    ? new Date(email.parent_sent_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
+                    : 'earlier';
+                const quotedLines = email.parent_body
+                    .replace(/\r\n/g, '\n')
+                    .split('\n')
+                    .map(line => `> ${line}`)
+                    .join('\n');
+                const quoteBlock = `\n\nOn ${when}, ${email.contact_name} wrote:\n${quotedLines}`;
+                bodyNormalised += quoteBlock.replace(/\n/g, '\r\n');
+                bodyForStorage = email.body.replace(/\r\n/g, '\n').trimEnd() + quoteBlock;
+            }
 
             const headerLines = [
                 `From: ${senderName} <${from}>`,
@@ -189,10 +206,17 @@ export async function POST(request: Request) {
                 }
             }
 
-            await env.DB
-                .prepare('UPDATE email SET sent_at = ?, message_id = ? WHERE id = ?')
-                .bind(sentAt, msgId, email.id)
-                .run();
+            if (bodyForStorage !== null) {
+                await env.DB
+                    .prepare('UPDATE email SET sent_at = ?, message_id = ?, body = ? WHERE id = ?')
+                    .bind(sentAt, msgId, bodyForStorage, email.id)
+                    .run();
+            } else {
+                await env.DB
+                    .prepare('UPDATE email SET sent_at = ?, message_id = ? WHERE id = ?')
+                    .bind(sentAt, msgId, email.id)
+                    .run();
+            }
 
             sent++;
         } catch (err) {

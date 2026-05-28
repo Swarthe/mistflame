@@ -26,6 +26,7 @@ receive).
 **Email history**
 - Full email log per contact, grouped by thread
 - Draft emails are editable after creation
+- Reply thread quote blocks are collapsed behind a toggle in the thread view
 - Outgoing emails support CC (stored in DB, delivered separately per address)
 
 **Sending**
@@ -33,6 +34,7 @@ receive).
 - Choose sender address per send; attachments supported (up to 10 MB each, sent
   as `multipart/mixed`)
 - Sender email is automatically determined for replies to inbound emails
+- Reply quotes blocks are automatically appended at send time
 - Requires the Cloudflare Workers Paid plan (email sending is a beta feature);
   receiving and viewing emails works without it
 
