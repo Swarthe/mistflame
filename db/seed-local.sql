@@ -1,13 +1,6 @@
 -- Local development seed data.
 -- Run from the mistflame directory:
---   npx wrangler d1 execute DB --local --file seed-local.sql
-
-DELETE FROM attachment;
-DELETE FROM contact_tag;
-DELETE FROM email;
-DELETE FROM contact;
-DELETE FROM tag;
-DELETE FROM sqlite_sequence WHERE name IN ('attachment','email','contact','tag');
+--   npx wrangler d1 execute DB --local --file db/seed-local.sql
 
 INSERT INTO contact (id, name, email) VALUES
     (1, 'Alice Nguyen',  'alice@example.com'),

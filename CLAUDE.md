@@ -53,18 +53,18 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 | `PASSWORD` | Secret | main | Login password |
 
 ## Database
-- D1 (SQLite). FK constraints declared in `schema.sql` but **not enforced at runtime**; cascading deletes are done manually in route handlers.
+- D1 (SQLite). FK constraints declared in `db/schema.sql` but **not enforced at runtime**; cascading deletes are done manually in route handlers.
 - Schema changes (remote): `npx wrangler d1 execute mistflame-db --remote --file <file>` for SQL files, or `--command "ALTER TABLE ..."` for single statements.
 - **Local D1 commands** (use the binding name `DB`, not the database name; all commands run from the mistflame directory):
   ```
   # Apply schema to local dev database
-  npx wrangler d1 execute DB --local --file schema.sql
+  npx wrangler d1 execute DB --local --file db/schema.sql
 
   # Run an arbitrary query
   npx wrangler d1 execute DB --local --command "SELECT * FROM contact"
 
-  # Run a SQL file (e.g. seed data)
-  npx wrangler d1 execute DB --local --file seed-local.sql
+  # Seed with example contacts and email threads for local testing
+  npx wrangler d1 execute DB --local --file db/seed-local.sql
 
   # Reset all data
   npx wrangler d1 execute DB --local --command "DELETE FROM email; DELETE FROM contact; DELETE FROM tag; DELETE FROM contact_tag; DELETE FROM sqlite_sequence WHERE name IN ('email','contact','tag');"

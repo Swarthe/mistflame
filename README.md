@@ -95,7 +95,7 @@ npx wrangler d1 create mistflame-db
 Copy the returned database ID into `wrangler.toml`, then apply the schema:
 
 ```bash
-npx wrangler d1 execute mistflame-db --remote --file schema.sql
+npx wrangler d1 execute mistflame-db --remote --file db/schema.sql
 ```
 
 ### 4. R2 bucket
@@ -220,8 +220,8 @@ deploy` only redeploys the main worker).
 
 ## Development
 
-For local development, copy `.dev.vars.example` to `.dev.vars` and fill in values.
-Secrets are never stored in config files.
+For local development, copy `.dev.vars.example` to `.dev.vars` and fill in
+values. Secrets are never stored in config files.
 
 ```bash
 cp .dev.vars.example .dev.vars      # fill in values
@@ -229,6 +229,25 @@ npm run dev                         # local Next.js dev server (no CF bindings)
 npm run preview                     # Cloudflare Workers preview with local binding simulators
 npm run preview:remote              # Cloudflare Workers preview against real remote bindings
 ```
+
+The local D1 database is created automatically on first run. Apply the schema
+and optionally seed it with example contacts and email threads for testing:
+
+```bash
+# Apply schema
+npx wrangler d1 execute DB --local --file db/schema.sql
+
+# Seed with example data (2 contacts, 3 threads covering all email states)
+npx wrangler d1 execute DB --local --file db/seed-local.sql
+
+# Reset all data
+npx wrangler d1 execute DB --local --command "DELETE FROM email; DELETE FROM contact; DELETE FROM tag; DELETE FROM contact_tag; DELETE FROM sqlite_sequence WHERE name IN ('email','contact','tag');"
+```
+
+All `wrangler d1` commands use the binding name `DB` (not the database name) and
+must be run from the project root. Local state is stored in
+`.wrangler/state/v3/d1/` (gitignored); delete that directory to fully reset the
+database.
 
 ## Limitations and missing features
 
