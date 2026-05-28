@@ -259,7 +259,8 @@ currently implemented.
 - **Full email search**: no full-text search across email bodies or subjects
 - **Contact import/export**: no CSV or vCard import/export
 - **Pagination**: long contact lists and email histories are loaded in full
-- **Email templates**: no reusable draft templates
+- **Email templates / LLM integration**: no reusable draft templates or LLM
+  support for reply generation
 - **Scheduled sending**: no support for sending emails at a scheduled time
 - **Multi-user access**: single-user only by design; no role-based access or
   shared sessions
