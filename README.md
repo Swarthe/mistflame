@@ -1,10 +1,9 @@
 # Mistflame
 
-Mistflame is a lightweight, self-hosted email manager for small-scale
-outreach/CRM and personal email domains. It gives you a single organised view of
-your contacts and the complete email history with each one. You can compose
-outbound drafts in the UI, and inbound replies arrive automatically via
-Cloudflare Email Routing.
+Mistflame is a lightweight email manager for small-scale outreach/CRM and
+personal email domains. It gives you a single organised view of your contacts
+and the complete email history with each one. You can compose outbound drafts in
+the UI, and inbound replies arrive automatically via Cloudflare Email Routing.
 
 ![Mistflame screenshot](screenshot.png)
 
@@ -21,7 +20,7 @@ receive).
 **Contacts**
 - Add, edit, and delete contacts (name, email, description)
 - Freeform colour-coded tags, fuzzy-searchable from the sidebar
-- Auto-computed awaiting-reply indicator per contact
+- Awaiting-reply indicator computer per contact, filterable from the sidebar
 
 **Email history**
 - Full email log per contact, grouped by thread
