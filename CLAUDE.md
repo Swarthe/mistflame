@@ -31,7 +31,8 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 |---|---|
 | `ORG_NAME` | Organisation/project name; shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email From: headers; defaults to empty |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
-| `SESSION_TTL_HOURS` | KV expiry for the server-side session token (default `24`); the browser cookie has no max-age, so the session always ends when the browser closes |
+| `SESSION_TTL_HOURS` | KV expiry for the server-side session token (default `24`); the browser session cookie has no max-age, so the session ends when the browser closes |
+| `REMEMBER_TTL_DAYS` | Duration of the remember-me cookie in days (default `30`); enforced as KV TTL and cookie Max-Age |
 | `PASSWORD` | Login password (secret) |
 
 **Email receiver worker (`email-receiver/wrangler.toml`)**
@@ -46,7 +47,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 | Binding | Type | Worker | Purpose |
 |---|---|---|---|
 | `DB` | D1 Database | both | Contacts and email history |
-| `SESSION` | KV Namespace | main | Active session token |
+| `SESSION` | KV Namespace | main | Active session token and remember-me tokens |
 | `ATTACHMENTS` | R2 Bucket | both | Email attachments |
 | `EMAIL_SENDER` | Send Email | both | Outbound email via Cloudflare Email Workers |
 | `KV` | KV Namespace | email-receiver | Rate limit counters (can share the `SESSION` namespace) |
@@ -125,8 +126,34 @@ Do not tighten `script-src` to remove `'unsafe-inline'` without first implementi
 - Email subject: 500 characters (enforced in POST and PATCH handlers)
 - Inbound attachments: 10 MB per file; oversized attachments are silently dropped in the email receiver before the R2 write
 
-## Password comparison
+## Authentication
+
+### Session cookie (`__session`)
+The primary session cookie is a browser-session cookie (no Max-Age). On login, a `crypto.randomUUID()` token is stored in KV under the key `session` with a TTL of `SESSION_TTL_HOURS` (default 24 hours). The `__session` cookie holds the token value. Middleware validates every protected request by comparing the cookie value against the KV-stored token.
+
+### Remember-me (`__remember`)
+When the user checks "Remember me" on the login form, a second token is generated and stored in KV under `remember:<token>`. The TTL defaults to 30 days and is configurable via `REMEMBER_TTL_DAYS`. The `__remember` cookie (HttpOnly, SameSite=Strict) has its Max-Age set to the same duration.
+
+On each request, `middleware.ts` checks auth in this order:
+1. If `__session` cookie is present and matches KV `session` → authenticated.
+2. If `__session` is missing or expired, check `__remember` cookie. If the KV key `remember:<value>` exists, auto-create a fresh session (new token stored in KV `session`, new `__session` cookie set) and refresh the `__remember` Max-Age. This means a user who returns after a browser restart is silently re-authenticated without seeing the login page.
+3. If neither cookie is valid → redirect to `/login` (or 401 for API routes).
+
+Visiting `/login` with a valid `__remember` cookie redirects straight to `/`.
+
+On logout, both KV keys (`session` and `remember:<token>`) are deleted and both cookies are cleared.
+
+### Dev mode
+When `DEV_MODE` is set (local development), hardcoded tokens are used instead of UUIDs: `dev-session-token` and `dev-remember-token`. KV is not read or written. The `Secure` flag is omitted from cookies.
+
+### Constants
+The cookie name constants (`SESSION_COOKIE`, `REMEMBER_COOKIE`) and `REMEMBER_TTL` are defined identically in both `middleware.ts` and `auth/route.ts`. This duplication is intentional (same reason as `isValidEmail`): middleware and API routes are different execution contexts and should not share imports that might pull in unwanted dependencies.
+
+### Password comparison
 `/api/auth` uses a manual XOR-reduce constant-time comparison (`a[i] ^ b[i]` accumulated into a single `diff`) to avoid leaking password length or content via timing. Do not replace with a plain `===` comparison.
+
+### Active session confirmation
+When logging in with a password while a session already exists (`session` KV key is present), the server returns 409. The client shows a confirmation prompt ("Another session is currently active"). This applies regardless of whether "Remember me" is checked; the remember-me token is only created after the password is accepted, so the confirmation flow is unchanged.
 
 ## Client fetch pattern
 All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined inside `OutreachPage`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).

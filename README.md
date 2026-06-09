@@ -51,6 +51,7 @@ receive).
 **Access**
 - Single-user: one password, one active session at a time
 - Logging in while a session is active shows a confirmation prompt
+- Optional "Remember me" checkbox persists login for 30 days
 
 ## Stack
 
@@ -170,6 +171,7 @@ changes needed to customise the app for a new deployment.
 | `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
 | `SESSION_TTL_HOURS` | `"24"` | Server-side KV expiry for the session token; the browser cookie is a session cookie (no max-age), so the session always ends when the browser closes |
+| `REMEMBER_TTL_DAYS` | `"30"` | Lifetime of the remember-me cookie and its KV token in days |
 
 ### Email receiver worker (`email-receiver/wrangler.toml`)
 

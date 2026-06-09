@@ -33,6 +33,8 @@ ORG_NAME = ""
 SEND_ADDRS = "hello@example.com"
 # Session duration in hours.
 SESSION_TTL_HOURS = "24"
+# Remember-me cookie duration in days.
+REMEMBER_TTL_DAYS = "30"
 
 [[d1_databases]]
 binding = "DB"

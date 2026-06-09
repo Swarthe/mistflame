@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 export default function LoginPage() {
     const router = useRouter();
     const [password, setPassword] = useState('');
+    const [remember, setRemember] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const [activeSession, setActiveSession] = useState(false);
@@ -21,7 +22,7 @@ export default function LoginPage() {
             const res = await fetch('/api/auth', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password, force }),
+                body: JSON.stringify({ password, force, remember }),
             });
             const data = (await res.json()) as { ok: boolean; activeSession?: boolean; error?: string };
             if (res.ok) {
@@ -65,6 +66,16 @@ export default function LoginPage() {
                         >
                             {loading ? 'Checking…' : 'Enter'}
                         </button>
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={remember}
+                                onChange={e => setRemember(e.target.checked)}
+                                disabled={loading}
+                                className="cursor-pointer accent-[#ffd54f]"
+                            />
+                            <span className="text-xs text-white/60 font-sans">Remember me</span>
+                        </label>
                         <div className="h-4">
                             {error && <p className="font-sans text-xs text-red-400">{error}</p>}
                         </div>

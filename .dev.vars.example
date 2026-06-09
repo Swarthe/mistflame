@@ -2,3 +2,4 @@ ORG_NAME=
 SEND_ADDRS=hello@example.com
 PASSWORD=
 DEV_MODE=true
+REMEMBER_TTL_DAYS=30

@@ -11,6 +11,7 @@ declare global {
     PASSWORD: string;
     DEV_MODE?: string;
     SESSION_TTL_HOURS?: string;
+    REMEMBER_TTL_DAYS?: string;
   }
 
   var EmailMessage: {
