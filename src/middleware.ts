@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 
-const SESSION_COOKIE = '__session';
 const REMEMBER_COOKIE = '__remember';
-const SESSION_KEY = 'session';
-const DEFAULT_REMEMBER_TTL = 30 * 24 * 60 * 60; // 30 days in seconds
 
 function setSecurityHeaders(response: NextResponse, pathname: string) {
     if (!pathname.startsWith('/api/')) {
@@ -16,53 +13,20 @@ function setSecurityHeaders(response: NextResponse, pathname: string) {
     response.headers.set('Referrer-Policy', 'no-referrer');
 }
 
-async function authenticate(request: NextRequest): Promise<{ authenticated: boolean; devMode: boolean; newSessionToken?: string; rememberToken?: string; rememberTtl?: number }> {
-    const sessionCookie = request.cookies.get(SESSION_COOKIE)?.value;
-
-    if (sessionCookie) {
-        try {
-            const { env } = await getCloudflareContext({ async: true });
-            const devMode = !!env.DEV_MODE;
-            if (devMode) {
-                return { authenticated: sessionCookie === 'dev-session-token', devMode };
-            }
-            const stored = await env.SESSION.get(SESSION_KEY);
-            if (stored !== null && stored === sessionCookie) {
-                return { authenticated: true, devMode };
-            }
-        } catch {
-            // fall through to remember-me check
-        }
-    }
-
+async function isAuthenticated(request: NextRequest): Promise<boolean> {
     const rememberCookie = request.cookies.get(REMEMBER_COOKIE)?.value;
-    if (!rememberCookie) return { authenticated: false, devMode: false };
+    if (!rememberCookie) return false;
 
     try {
         const { env } = await getCloudflareContext({ async: true });
-        const devMode = !!env.DEV_MODE;
-        let rememberValid = false;
-        if (devMode) {
-            rememberValid = rememberCookie === 'dev-remember-token';
-        } else {
-            const stored = await env.SESSION.get(`remember:${rememberCookie}`);
-            rememberValid = stored !== null;
+        if (env.DEV_MODE) {
+            return rememberCookie === 'dev-remember-token';
         }
-
-        if (rememberValid) {
-            const ttlHours = Math.max(1, parseInt(env.SESSION_TTL_HOURS ?? '24', 10) || 24);
-            const rememberTtlDays = Math.max(1, parseInt(env.REMEMBER_TTL_DAYS ?? '30', 10) || 30);
-            const newToken = devMode ? 'dev-session-token' : crypto.randomUUID();
-            if (!devMode) {
-                await env.SESSION.put(SESSION_KEY, newToken, { expirationTtl: ttlHours * 60 * 60 });
-            }
-            return { authenticated: true, devMode, newSessionToken: newToken, rememberToken: rememberCookie, rememberTtl: rememberTtlDays * 24 * 60 * 60 };
-        }
+        const stored = await env.SESSION.get(`remember:${rememberCookie}`);
+        return stored !== null;
     } catch {
-        // fall through
+        return false;
     }
-
-    return { authenticated: false, devMode: false };
 }
 
 export async function middleware(request: NextRequest) {
@@ -73,22 +37,22 @@ export async function middleware(request: NextRequest) {
         pathname === '/api/auth' ||
         pathname === '/api/config';
 
-    const auth = await authenticate(request);
-
-    if (auth.authenticated && pathname === '/login') {
-        const response = NextResponse.redirect(new URL('/', request.url));
-        if (auth.newSessionToken) {
-            const secure = auth.devMode ? '' : '; Secure';
-            response.headers.set('Set-Cookie', `${SESSION_COOKIE}=${auth.newSessionToken}${secure}; Path=/; HttpOnly; SameSite=Strict`);
-            if (auth.rememberToken) {
-                response.headers.append('Set-Cookie', `${REMEMBER_COOKIE}=${auth.rememberToken}${secure}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${auth.rememberTtl ?? DEFAULT_REMEMBER_TTL}`);
+    if (isPublic) {
+        if (pathname === '/login') {
+            const authed = await isAuthenticated(request);
+            if (authed) {
+                const response = NextResponse.redirect(new URL('/', request.url));
+                setSecurityHeaders(response, pathname);
+                return response;
             }
         }
+        const response = NextResponse.next();
         setSecurityHeaders(response, pathname);
         return response;
     }
 
-    if (!auth.authenticated && !isPublic) {
+    const authed = await isAuthenticated(request);
+    if (!authed) {
         if (pathname.startsWith('/api/')) {
             return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
         }
@@ -96,15 +60,6 @@ export async function middleware(request: NextRequest) {
     }
 
     const response = NextResponse.next();
-
-    if (auth.newSessionToken) {
-        const secure = auth.devMode ? '' : '; Secure';
-        response.headers.set('Set-Cookie', `${SESSION_COOKIE}=${auth.newSessionToken}${secure}; Path=/; HttpOnly; SameSite=Strict`);
-        if (auth.rememberToken) {
-            response.headers.append('Set-Cookie', `${REMEMBER_COOKIE}=${auth.rememberToken}${secure}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${auth.rememberTtl ?? DEFAULT_REMEMBER_TTL}`);
-        }
-    }
-
     setSecurityHeaders(response, pathname);
     return response;
 }

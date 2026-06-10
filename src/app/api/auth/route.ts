@@ -1,6 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 
-const SESSION_COOKIE = '__session';
 const REMEMBER_COOKIE = '__remember';
 const SESSION_KEY = 'session';
 const DEFAULT_REMEMBER_TTL = 30 * 24 * 60 * 60; // 30 days in seconds
@@ -9,6 +8,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const password = body?.password;
     const force = body?.force === true;
+    const remember = body?.remember === true;
 
     if (typeof password !== 'string') {
         return Response.json({ ok: false, error: 'Password required.' }, { status: 400 });
@@ -16,8 +16,8 @@ export async function POST(request: Request) {
 
     const { env } = await getCloudflareContext({ async: true });
 
-    const ttlHours = Math.max(1, parseInt(env.SESSION_TTL_HOURS ?? '24', 10) || 24);
-    const kvTtl = ttlHours * 60 * 60;
+    const sessionTtlHours = Math.max(1, parseInt(env.SESSION_TTL_HOURS ?? '24', 10) || 24);
+    const sessionKvTtl = sessionTtlHours * 60 * 60;
 
     const encoder = new TextEncoder();
     const a = encoder.encode(password);
@@ -29,39 +29,39 @@ export async function POST(request: Request) {
         return Response.json({ ok: false, error: 'Incorrect password.' }, { status: 401 });
     }
 
-    if (!env.DEV_MODE && !force) {
-        const existing = await env.SESSION.get(SESSION_KEY);
-        if (existing) {
-            return Response.json({ ok: false, activeSession: true }, { status: 409 });
-        }
-    }
+    const token = env.DEV_MODE ? 'dev-remember-token' : crypto.randomUUID();
 
-    const token = env.DEV_MODE ? 'dev-session-token' : crypto.randomUUID();
-    if (!env.DEV_MODE) {
-        await env.SESSION.put(SESSION_KEY, token, { expirationTtl: kvTtl });
-    }
-
-    const remember = body?.remember === true;
-
-    const rememberTtlDays = Math.max(1, parseInt(env.REMEMBER_TTL_DAYS ?? '30', 10) || 30);
-    const rememberTtl = rememberTtlDays * 24 * 60 * 60;
-
-    let rememberToken: string | null = null;
+    let cookieMaxAge = '';
+    let kvTtl = sessionKvTtl;
     if (remember) {
-        rememberToken = env.DEV_MODE ? 'dev-remember-token' : crypto.randomUUID();
-        if (!env.DEV_MODE) {
-            await env.SESSION.put(`remember:${rememberToken}`, '', { expirationTtl: rememberTtl });
+        const rememberTtlDays = Math.max(1, parseInt(env.REMEMBER_TTL_DAYS ?? '30', 10) || 30);
+        kvTtl = rememberTtlDays * 24 * 60 * 60;
+        cookieMaxAge = `; Max-Age=${kvTtl}`;
+    }
+
+    if (!env.DEV_MODE) {
+        if (!force) {
+            const existingToken = await env.SESSION.get(SESSION_KEY);
+            if (existingToken) {
+                const stillValid = await env.SESSION.get(`remember:${existingToken}`);
+                if (stillValid !== null) {
+                    return Response.json({ ok: false, activeSession: true }, { status: 409 });
+                }
+            }
+        } else {
+            const oldToken = await env.SESSION.get(SESSION_KEY);
+            if (oldToken) {
+                await env.SESSION.delete(`remember:${oldToken}`);
+            }
         }
+
+        await env.SESSION.put(SESSION_KEY, token, { expirationTtl: kvTtl });
+        await env.SESSION.put(`remember:${token}`, '', { expirationTtl: kvTtl });
     }
 
-    const cookieFlags = `Path=/; HttpOnly; SameSite=Strict`;
     const secure = !env.DEV_MODE ? '; Secure' : '';
-
     const response = Response.json({ ok: true });
-    response.headers.set('Set-Cookie', `${SESSION_COOKIE}=${token}${secure}; ${cookieFlags}`);
-    if (rememberToken) {
-        response.headers.append('Set-Cookie', `${REMEMBER_COOKIE}=${rememberToken}${secure}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${rememberTtl}`);
-    }
+    response.headers.set('Set-Cookie', `${REMEMBER_COOKIE}=${token}${secure}; Path=/; HttpOnly; SameSite=Strict${cookieMaxAge}`);
     return response;
 }
 
@@ -77,10 +77,9 @@ export async function DELETE(request: Request) {
             }
         }
     } catch {
-        // best-effort, still clear the cookies
+        // best-effort, still clear the cookie
     }
     const response = Response.json({ ok: true });
-    response.headers.set('Set-Cookie', `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
-    response.headers.append('Set-Cookie', `${REMEMBER_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
+    response.headers.set('Set-Cookie', `${REMEMBER_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict`);
     return response;
 }

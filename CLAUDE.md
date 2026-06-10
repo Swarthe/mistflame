@@ -20,7 +20,7 @@
 - Next.js 16 App Router, deployed on Cloudflare Workers via `@opennextjs/cloudflare`.
 - Do **not** use `export const runtime = 'edge'` in any route; not supported by OpenNext.
 - `middleware.ts` is the correct convention; the deprecation warning during build is expected and harmless.
-- `cloudflare:email` is ESM-only; `scripts/patch-opennext.mjs` rewrites the runtime `require()` call post-build. Do not change how it is imported in `send-emails/route.ts`.
+- `cloudflare:email` is ESM-only; it must be imported via string-concatenation (`(await import('cloudflare' + ':email'))`) to prevent esbuild from trying to resolve it. `scripts/patch-opennext.mjs` rewrites the bundled runtime `require()` call post-build. Do not change how it is imported in `send-emails/route.ts` or `email-receiver/index.ts`.
 
 ## Configuration
 All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (password). For local development, copy `.dev.vars.example` to `.dev.vars`.
@@ -31,8 +31,8 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 |---|---|
 | `ORG_NAME` | Organisation/project name; shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email From: headers; defaults to empty |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
-| `SESSION_TTL_HOURS` | KV expiry for the server-side session token (default `24`); the browser session cookie has no max-age, so the session ends when the browser closes |
-| `REMEMBER_TTL_DAYS` | Duration of the remember-me cookie in days (default `30`); enforced as KV TTL and cookie Max-Age |
+| `SESSION_TTL_HOURS` | KV TTL for the active-session marker and for the auth token when "Remember me" is unchecked (default `24`); does not control cookie Max-Age |
+| `REMEMBER_TTL_DAYS` | KV TTL and cookie Max-Age for the auth token when "Remember me" is checked (default `30`) |
 | `PASSWORD` | Login password (secret) |
 
 **Email receiver worker (`email-receiver/wrangler.toml`)**
@@ -47,7 +47,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 | Binding | Type | Worker | Purpose |
 |---|---|---|---|
 | `DB` | D1 Database | both | Contacts and email history |
-| `SESSION` | KV Namespace | main | Active session token and remember-me tokens |
+| `SESSION` | KV Namespace | main | Active session marker and auth tokens |
 | `ATTACHMENTS` | R2 Bucket | both | Email attachments |
 | `EMAIL_SENDER` | Send Email | both | Outbound email via Cloudflare Email Workers |
 | `KV` | KV Namespace | email-receiver | Rate limit counters (can share the `SESSION` namespace) |
@@ -83,6 +83,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 - The `+ Reply` button is only shown on inbound emails (`sender IS NULL`). Replies are always sent as mistflame.
 - When replying, the sender address is locked to the address that originally received the inbound email.
 - Reply drafts are composed without quoted text in the body. At send time, `send-emails/route.ts` appends the quoted parent body to both the outgoing email and the stored DB body. The thread view collapses quoted sections behind a `···` toggle button (`splitQuote` in `page.tsx` detects the `\n\nOn ... wrote:` boundary); inbound emails from contacts are handled the same way if their client includes quoted text.
+- CC addresses are stored as a comma-separated string. At send time, the raw email is delivered separately to each CC address rather than relying on the `Cc:` SMTP header alone (see "CC delivery" below).
 - The POST and PATCH endpoints for emails reject `sender: null`; null senders are only written by the email receiver worker directly via D1, not via the API.
 
 ## Email data model
@@ -103,6 +104,18 @@ The `email` table uses two columns to encode email state; get these wrong and ev
 ## Email worker
 - The email receiver (`email-receiver/index.ts`) is a **separate worker** with its own `wrangler.toml`. `npm run deploy` does not redeploy it.
 - Deploy: `npx wrangler deploy --config email-receiver/wrangler.toml`
+- Unknown senders are auto-created as contacts (name from the parsed `From:` display name, email from the sender address) with `INSERT OR IGNORE`. If the insert race-conditions, the second `SELECT` fallback handles it.
+- Inbound attachments are silently dropped if they exceed 10 MB or have no content (`!att.content`). Related/inline attachments (`att.related`) are skipped.
+- Notification emails (one per `NOTIFY_ADDRS`) are sent with a 500-character body preview. Notification failures are caught and never affect inbound processing.
+- The rate limiter uses a KV counter keyed by time-bucket (`rate:inbound:{bucket}`). It warns once per bucket via email when the limit is reached, then silently discards. The counter is not atomically exact (read-increment-write), but effective against sustained spam.
+
+## Build patch (`scripts/patch-opennext.mjs`)
+Applied automatically via the `postinstall` hook. Three changes to `@opennextjs/cloudflare`:
+1. Adds `"cloudflare:email"` to the esbuild `external` array so esbuild does not try to resolve it.
+2. Changes `const patchedCode` to `let patchedCode` in the bundle server script, so the next step can reassign it.
+3. Rewrites `require("cloudflare:email")` in the bundled output to `__cfEmail` (a top-level `import * as __cfEmail from "cloudflare:email"`).
+
+The script is idempotent — it checks for each change before applying. If any patch site is missing, it exits with code 1. Do not remove or restructure it without understanding the import chain.
 
 ## Shared constants
 - `isValidEmail` is exported from `src/app/api/contacts/route.ts` for server-side use. It is also defined inline in `page.tsx` for client-side use; this duplication is intentional (different environments); do not consolidate.
@@ -128,32 +141,49 @@ Do not tighten `script-src` to remove `'unsafe-inline'` without first implementi
 
 ## Authentication
 
-### Session cookie (`__session`)
-The primary session cookie is a browser-session cookie (no Max-Age). On login, a `crypto.randomUUID()` token is stored in KV under the key `session` with a TTL of `SESSION_TTL_HOURS` (default 24 hours). The `__session` cookie holds the token value. Middleware validates every protected request by comparing the cookie value against the KV-stored token.
+### Login (`POST /api/auth`)
+On successful password check, a `crypto.randomUUID()` token is generated. Two KV keys are written, both with the same TTL:
 
-### Remember-me (`__remember`)
-When the user checks "Remember me" on the login form, a second token is generated and stored in KV under `remember:<token>`. The TTL defaults to 30 days and is configurable via `REMEMBER_TTL_DAYS`. The `__remember` cookie (HttpOnly, SameSite=Strict) has its Max-Age set to the same duration.
+| KV key | Value | Purpose |
+|---|---|---|
+| `session` | the token | Tracks the current session; used for the overlap check and displacement |
+| `remember:<token>` | `""` (empty) | Auth token; middleware looks this up on every request |
 
-On each request, `middleware.ts` checks auth in this order:
-1. If `__session` cookie is present and matches KV `session` → authenticated.
-2. If `__session` is missing or expired, check `__remember` cookie. If the KV key `remember:<value>` exists, auto-create a fresh session (new token stored in KV `session`, new `__session` cookie set) and refresh the `__remember` Max-Age. This means a user who returns after a browser restart is silently re-authenticated without seeing the login page.
-3. If neither cookie is valid → redirect to `/login` (or 401 for API routes).
+The `__remember` cookie (HttpOnly, SameSite=Strict) holds the token. When "Remember me" is unchecked, the cookie has no Max-Age (browser-session cookie) and both KV keys use `SESSION_TTL_HOURS`. When checked, the cookie gets a Max-Age and both KV keys use `REMEMBER_TTL_DAYS`.
 
-Visiting `/login` with a valid `__remember` cookie redirects straight to `/`.
+### Middleware auth check
+Middleware reads `__remember` from the request, looks up `remember:<cookieValue>` in KV. If found → authenticated. If not → redirect to `/login` (or 401 for API routes). Visiting `/login` with a valid cookie redirects straight to `/`. One KV read per request, no session-creation side effects.
 
-On logout, both KV keys (`session` and `remember:<token>`) are deleted and both cookies are cleared.
+### Session overlap check (409)
+Before writing a new token, the server reads the existing `session` key. If a token is found, it verifies that `remember:<token>` still exists in KV. Only if both are present does it return 409 ("Another session is currently active"). A stale `session` marker whose auth token has expired is silently ignored — login proceeds without a prompt.
+
+### Forced login (displacement)
+When the user clicks "Log in anyway" (`force: true`), the old token is read from `session` and `remember:<oldToken>` is deleted from KV before the new token is written. The displaced user's cookie stops working on their next request.
+
+### Logout (`DELETE /api/auth`)
+Deletes both the `session` key and `remember:<token>` from KV, then clears the `__remember` cookie.
 
 ### Dev mode
-When `DEV_MODE` is set (local development), hardcoded tokens are used instead of UUIDs: `dev-session-token` and `dev-remember-token`. KV is not read or written. The `Secure` flag is omitted from cookies.
+When `DEV_MODE` is set, a hardcoded token (`dev-remember-token`) is used. KV is not read or written. The `Secure` flag is omitted from the cookie.
 
 ### Constants
-The cookie name constants (`SESSION_COOKIE`, `REMEMBER_COOKIE`) and `REMEMBER_TTL` are defined identically in both `middleware.ts` and `auth/route.ts`. This duplication is intentional (same reason as `isValidEmail`): middleware and API routes are different execution contexts and should not share imports that might pull in unwanted dependencies.
+The `REMEMBER_COOKIE` constant is defined identically in both `middleware.ts` and `auth/route.ts`. This duplication is intentional (same reason as `isValidEmail`): middleware and API routes are different execution contexts and should not share imports.
 
 ### Password comparison
 `/api/auth` uses a manual XOR-reduce constant-time comparison (`a[i] ^ b[i]` accumulated into a single `diff`) to avoid leaking password length or content via timing. Do not replace with a plain `===` comparison.
 
-### Active session confirmation
-When logging in with a password while a session already exists (`session` KV key is present), the server returns 409. The client shows a confirmation prompt ("Another session is currently active"). This applies regardless of whether "Remember me" is checked; the remember-me token is only created after the password is accepted, so the confirmation flow is unchanged.
-
 ## Client fetch pattern
 All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined inside `OutreachPage`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).
+
+## Client state (page.tsx)
+- **Polling**: a 10-second `setInterval` polls `/api/contacts/{id}/emails`, `/api/contacts`, and `/api/send-emails` while the tab is visible. A `visibilitychange` listener pauses polling when the tab is hidden and fires an immediate poll when it becomes visible again. Do not remove this without an alternative refresh mechanism.
+- **Contact persistence**: the selected contact ID is stored in `localStorage` under the key `mf_contact` and restored on mount. This survives page reloads and browser restarts.
+
+## CC delivery
+Outgoing CC addresses are stored as a comma-separated string in the `cc` column. At send time (`send-emails/route.ts`), the raw email is delivered separately to each CC address (one `EMAIL_SENDER.send()` call per address) rather than relying on the SMTP `Cc:` header for delivery. The `Cc:` header is still included in each copy for recipient visibility.
+
+## Styling
+- Tailwind CSS 4 with `shadcn/ui` and `tw-animate-css`.
+- `next-themes` is configured with `forcedTheme="dark"` — the app is dark-only. Do not add a light theme toggle without removing `forcedTheme`.
+- Two Google Fonts loaded via `next/font/google`: DM Sans (body, variable `--font-dm-sans`) and Libre Baskerville (headings, variable `--font-playfair`). A custom `font-heading-bold` utility class uses the Playfair variable.
+- `robots.ts` serves `Disallow: /` for all user agents as a static route (complementing the `X-Robots-Tag` header set by middleware).
