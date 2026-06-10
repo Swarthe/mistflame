@@ -599,12 +599,42 @@ export default function OutreachPage() {
         );
     });
 
+    // Helper: fetch, check ok, parse JSON. Rejects on non-ok so .catch handles it.
+    const json = <T,>(res: Response): Promise<T> => res.ok ? res.json() as Promise<T> : Promise.reject();
+
+    const fetchEmails = (id: number) =>
+        apiFetch(`/api/contacts/${id}/emails`)
+            .then(r => json<{ emails?: EmailRecord[] }>(r))
+            .then(data => {
+                setEmails(prev => {
+                    const next = data.emails ?? [];
+                    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+                });
+            })
+            .catch(() => {});
+
+    const fetchPendingCount = () => {
+        apiFetch('/api/send-emails')
+            .then(r => json<{ count?: number }>(r))
+            .then(data => setPendingCount(prev => {
+                const next = data.count ?? 0;
+                return prev === next ? prev : next;
+            }))
+            .catch(() => setPendingCount(0));
+    };
+
     const fetchContacts = () => {
         setLoadingContacts(true);
         setContactsError(false);
         apiFetch('/api/contacts')
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then((data: unknown) => { setContacts(((data as { contacts?: Contact[] }).contacts) ?? []); setContactsError(false); })
+            .then(r => json<{ contacts?: Contact[] }>(r))
+            .then(data => {
+                setContacts(prev => {
+                    const next = data.contacts ?? [];
+                    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+                });
+                setContactsError(false);
+            })
             .catch(() => setContactsError(true))
             .finally(() => setLoadingContacts(false));
     };
@@ -612,44 +642,28 @@ export default function OutreachPage() {
     useEffect(() => {
         apiFetch('/api/config')
             .then(r => r.json())
-            .then((data: unknown) => {
-                const cfg = data as AppConfig;
-                setConfig(cfg);
-            })
+            .then((data: unknown) => setConfig(data as AppConfig))
             .catch(() => {});
         fetchContacts();
-        apiFetch('/api/send-emails')
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
-            .catch(() => setPendingCount(0));
+        fetchPendingCount();
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (selectedId === null) { setEmails([]); return; }
         setEmails([]);
         setLoadingEmails(true);
-        apiFetch(`/api/contacts/${selectedId}/emails`)
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
-            .catch(() => {})
-            .finally(() => setLoadingEmails(false));
+        fetchEmails(selectedId).finally(() => setLoadingEmails(false));
     }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
         if (selectedId === null) return;
         const poll = () => {
             if (document.visibilityState !== 'visible') return;
-            apiFetch(`/api/contacts/${selectedId}/emails`)
-                .then(r => r.ok ? r.json() : Promise.reject())
-                .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
-                .catch(() => {});
+            fetchEmails(selectedId);
             refreshContacts();
-            apiFetch('/api/send-emails')
-                .then(r => r.ok ? r.json() : Promise.reject())
-                .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
-                .catch(() => {});
+            fetchPendingCount();
         };
-        const interval = setInterval(poll, 10_000);
+        const interval = setInterval(poll, 5_000);
         document.addEventListener('visibilitychange', poll);
         return () => {
             clearInterval(interval);
@@ -690,15 +704,20 @@ export default function OutreachPage() {
 
     const refreshContacts = () => {
         apiFetch('/api/contacts')
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then((data: unknown) => setContacts(((data as { contacts?: Contact[] }).contacts) ?? []))
-            .catch(() => {}); // background refresh after mutation — keep existing contacts on error
+            .then(r => json<{ contacts?: Contact[] }>(r))
+            .then(data => {
+                setContacts(prev => {
+                    const next = data.contacts ?? [];
+                    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+                });
+            })
+            .catch(() => {}); // keep existing contacts on error
     };
 
     const refreshPendingCount = () => {
         apiFetch('/api/send-emails')
-            .then(r => r.ok ? r.json() : Promise.reject())
-            .then((data: unknown) => setPendingCount((data as { count?: number }).count ?? 0))
+            .then(r => json<{ count?: number }>(r))
+            .then(data => setPendingCount(data.count ?? 0))
             .catch(() => {});
     };
 
@@ -714,7 +733,7 @@ export default function OutreachPage() {
             const res = await apiFetch('/api/send-emails', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({}),
+                body: JSON.stringify({ send_all: true }),
             });
             const data = (await res.json()) as { sent?: number; failed?: number; errors?: string[] };
             setSendResult({ sent: data.sent ?? 0, failed: data.failed ?? 0, errors: data.errors ?? [] });

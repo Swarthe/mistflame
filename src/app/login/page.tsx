@@ -81,7 +81,7 @@ export default function LoginPage() {
                         </div>
                     </form>
                 ) : (
-                    <div className="flex flex-col gap-4">
+                    <div className="flex flex-col gap-4 mb-8">
                         <div className="border border-[#ffd54f]/30 bg-[#ffd54f]/[0.05] px-4 py-3">
                             <p className="font-sans text-sm text-white/80 leading-relaxed">
                                 Another session is currently active. Logging in will disconnect them and may disrupt ongoing work.
@@ -90,14 +90,14 @@ export default function LoginPage() {
                         <button
                             onClick={() => submit(true)}
                             disabled={loading}
-                            className="bg-white/80 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="bg-white/80 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                         >
                             {loading ? 'Logging in…' : 'Log in anyway'}
                         </button>
                         <button
-                            onClick={() => setActiveSession(false)}
+                            onClick={() => { setActiveSession(false); setError(''); }}
                             disabled={loading}
-                            className="font-sans text-sm text-white/50 hover:text-white/80 transition-colors"
+                            className="font-sans text-sm text-white/50 hover:text-white/80 transition-colors cursor-pointer"
                         >
                             Cancel
                         </button>

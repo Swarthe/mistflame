@@ -2,7 +2,6 @@ import { getCloudflareContext } from '@opennextjs/cloudflare';
 
 const REMEMBER_COOKIE = '__remember';
 const SESSION_KEY = 'session';
-const DEFAULT_REMEMBER_TTL = 30 * 24 * 60 * 60; // 30 days in seconds
 
 export async function POST(request: Request) {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;

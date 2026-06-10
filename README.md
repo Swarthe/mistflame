@@ -39,6 +39,7 @@ receive).
 
 **Receiving**
 - Inbound emails matched to contacts by sender address
+- Automatic polling and refreshing on new email arrivals
 - Reply threading via `In-Reply-To` header matching with a subject-line fallback
 - Attachments stored in R2 and shown in the UI
 - Unknown senders auto-created as new contacts (name from display name, email
@@ -265,6 +266,10 @@ currently implemented.
 - **Scheduled sending**: no support for sending emails at a scheduled time
 - **Multi-user access**: single-user only by design; no role-based access or
   shared sessions
+- **Change tracking for polling**: the client polls every 5 seconds for new
+  data, fetching full contact and email lists each time. A lightweight change
+  indicator (e.g. a KV-stored timestamp updated on mutation) would let the
+  client skip expensive refetches when nothing has changed
 
 ## Notes
 
