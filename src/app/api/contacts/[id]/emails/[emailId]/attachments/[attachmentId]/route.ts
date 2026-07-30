@@ -1,7 +1,7 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 
 export async function GET(
-    _request: Request,
+    request: Request,
     { params }: { params: Promise<{ id: string; emailId: string; attachmentId: string }> }
 ) {
     const { id, emailId, attachmentId } = await params;
@@ -34,13 +34,22 @@ export async function GET(
 
     const safeName = encodeURIComponent(row.file_name);
     const escapedName = row.file_name.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    return new Response(obj.body, {
-        headers: {
-            'Content-Type': row.content_type,
-            'Content-Disposition': `attachment; filename="${escapedName}"; filename*=UTF-8''${safeName}`,
-            'Content-Length': String(obj.size),
-        },
-    });
+    // Inline parts of an HTML body are requested by <img src>, so they must not
+    // arrive as a download. nosniff and the locked-down CSP cover the case where
+    // such a URL is opened directly instead.
+    const inline = new URL(request.url).searchParams.get('inline') === '1';
+    const headers: Record<string, string> = {
+        'Content-Type': row.content_type,
+        'Content-Disposition': inline
+            ? 'inline'
+            : `attachment; filename="${escapedName}"; filename*=UTF-8''${safeName}`,
+        'Content-Length': String(obj.size),
+        'X-Content-Type-Options': 'nosniff',
+    };
+    if (inline) {
+        headers['Content-Security-Policy'] = "default-src 'none'; sandbox";
+    }
+    return new Response(obj.body, { headers });
 }
 
 export async function DELETE(

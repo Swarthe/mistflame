@@ -1,7 +1,9 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
+import { sanitiseEmailHtml, buildEmailDocument, type SanitisedEmail } from '@/lib/email-html';
+import type { DOMPurify as Purifier } from 'dompurify';
 const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -31,6 +33,9 @@ interface Attachment {
     filename: string;
     content_type: string;
     size: number;
+    content_id: string | null;
+    /** 1 = embedded in body_html via cid:, so not listed as a file. */
+    inline: number;
 }
 
 interface EmailRecord {
@@ -42,6 +47,8 @@ interface EmailRecord {
     sent_at: string | null;
     subject: string | null;
     body: string;
+    /** HTML alternative; null means body is the only rendition. */
+    body_html: string | null;
     recipient: string | null;
     cc: string | null;
     attachments: Attachment[];
@@ -100,6 +107,165 @@ function splitQuote(body: string): { main: string; quote: string | null } {
         main: normalised.slice(0, match.index).trimEnd(),
         quote: normalised.slice(match.index + 2).trimEnd(),
     };
+}
+
+/**
+ * DOMPurify is imported on demand rather than at module scope: it must not run
+ * during the prerender of this client page, and its weight should only be paid
+ * once an HTML email is actually on screen. The promise is shared so that a
+ * thread full of HTML emails resolves one module.
+ */
+let purifyPromise: Promise<Purifier> | null = null;
+
+function loadPurifier(): Promise<Purifier> {
+    if (!purifyPromise) {
+        purifyPromise = import('dompurify')
+            .then(({ default: purify }) => {
+                if (typeof purify?.addHook !== 'function'
+                    || typeof purify?.sanitize !== 'function') {
+                    // A DOMPurify evaluated without a usable window returns a bare
+                    // factory instead of an instance, which would otherwise fail
+                    // later with a confusing "addHook is not a function".
+                    throw new Error('dompurify resolved without a usable instance');
+                }
+                return purify;
+            })
+            .catch(err => {
+                // Allow a later card to retry rather than wedging on one failure.
+                purifyPromise = null;
+                throw err;
+            });
+    }
+    return purifyPromise;
+}
+
+/**
+ * Sanitise an email's HTML body, or null when it has none or the sanitiser has
+ * not loaded yet. Callers fall back to the plain-text body in both cases, so a
+ * failed import degrades to readable text rather than an empty card.
+ */
+function useSanitisedHtml(email: EmailRecord, loadImages: boolean): SanitisedEmail | null {
+    // Held in a wrapper object, not as the bare instance. A DOMPurify instance is
+    // itself callable, so passing it straight to a setState would be taken for an
+    // updater function: React would invoke it with the previous state, and
+    // DOMPurify(null) returns a window-less factory with no addHook or sanitize.
+    // The wrapper makes that mistake a type error rather than a runtime one.
+    const [loadedPurifier, setLoadedPurifier] =
+        useState<{ purify: Purifier } | null>(null);
+    const purifier = loadedPurifier?.purify ?? null;
+    // Only inbound mail is rendered as HTML. Our own messages are composed as
+    // plain text, so they are shown that way: the HTML rendition of a sent reply
+    // exists to carry the quote chain to the recipient, not to be read back here.
+    // It stays in body_html regardless, because the next reply quotes it.
+    const html = email.sender === null ? email.body_html : null;
+    // Polling replaces the attachment array every 10 seconds; depend on the cid
+    // mapping itself so a poll does not re-sanitise and rebuild the DOM.
+    const cidKey = email.attachments
+        .map(a => `${a.id}:${a.content_id ?? ''}`)
+        .join(',');
+
+    useEffect(() => {
+        if (!html || purifier) return;
+        let cancelled = false;
+        loadPurifier()
+            .then(purify => { if (!cancelled) setLoadedPurifier({ purify }); })
+            .catch(err => {
+                // Never silent: the card falls back to plain text, and without a
+                // log there is nothing to distinguish that from an email that
+                // simply had no HTML part.
+                console.error('Could not load the HTML sanitiser', err);
+            });
+        return () => { cancelled = true; };
+    }, [html, purifier]);
+
+    return useMemo(() => {
+        if (!html || !purifier) return null;
+        try {
+            return sanitiseEmailHtml(purifier, html, {
+                contactId: email.contact_id,
+                emailId: email.id,
+                attachments: email.attachments,
+                loadImages,
+            });
+        } catch (err) {
+            // One unrenderable body must not take the whole page down with it.
+            // Returning null falls the card back to its plain-text rendition,
+            // which is always populated.
+            console.error(`Could not render HTML body of email ${email.id}`, err);
+            return null;
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [html, purifier, email.contact_id, email.id, cidKey, loadImages]);
+}
+
+/** Guards against an email whose own CSS inflates the document indefinitely. */
+const MAX_FRAME_HEIGHT = 20000;
+const MIN_FRAME_HEIGHT = 24;
+
+/**
+ * Render a sanitised email in an isolated frame.
+ *
+ * `sandbox` without `allow-scripts` means nothing in the message can execute, so
+ * `allow-same-origin` is safe and lets us read the document to size the frame to
+ * its content. `allow-popups` is what makes links clickable, since a sandboxed
+ * frame otherwise blocks the new tab, and `allow-popups-to-escape-sandbox` stops
+ * the opened page inheriting these restrictions.
+ *
+ * If the document cannot be read for any reason the card falls back to the
+ * plain-text rendition rather than showing an empty box.
+ */
+function EmailFrame({ srcDoc, fallback }: { srcDoc: string; fallback: ReactNode }) {
+    const frameRef = useRef<HTMLIFrameElement>(null);
+    const observerRef = useRef<ResizeObserver | null>(null);
+    const [height, setHeight] = useState(80);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => () => observerRef.current?.disconnect(), []);
+
+    const handleLoad = () => {
+        const body = frameRef.current?.contentDocument?.body;
+        if (!body) {
+            console.error('Email frame document was not readable; showing plain text.');
+            setFailed(true);
+            return;
+        }
+        // body height stays content-driven while the frame's own height is set
+        // from it, so measuring the body cannot feed back into itself the way
+        // measuring documentElement would.
+        const measure = () => {
+            const target = frameRef.current?.contentDocument?.body;
+            if (!target) return;
+            // Floored so that an email which hides its own content, or has none,
+            // leaves a visible sliver rather than a card that looks broken.
+            setHeight(Math.max(
+                MIN_FRAME_HEIGHT,
+                Math.min(target.scrollHeight, MAX_FRAME_HEIGHT)));
+        };
+        // Deferred a frame so the first measurement does not force a synchronous
+        // layout inside the load handler, which the browser warns about and which
+        // can read a height taken before the frame's styles have settled.
+        requestAnimationFrame(measure);
+        // Images finish arriving after the document does, and expanding the quote
+        // reflows it, so the height has to keep tracking the content.
+        observerRef.current?.disconnect();
+        const observer = new ResizeObserver(measure);
+        observer.observe(body);
+        observerRef.current = observer;
+    };
+
+    if (failed) return <>{fallback}</>;
+
+    return (
+        <iframe
+            ref={frameRef}
+            title="Email message"
+            srcDoc={srcDoc}
+            onLoad={handleLoad}
+            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
+            className="mf-email-frame"
+            style={{ height }}
+        />
+    );
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -279,6 +445,10 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
     const [quoteExpanded, setQuoteExpanded] = useState(false);
+    // Deliberately not persisted: the decision to contact a sender's server
+    // should be made again on a fresh view rather than inherited.
+    const [loadImages, setLoadImages] = useState(false);
+    const sanitised = useSanitisedHtml(email, loadImages);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -396,6 +566,21 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
     }
 
     const { main: bodyMain, quote: bodyQuote } = splitQuote(email.body);
+    // Until the sanitiser resolves, the plain-text rendition stands in; it is
+    // also the permanent fallback if the dynamic import fails.
+    const showHtml = sanitised !== null;
+    const quoteContent = showHtml ? sanitised.quote : bodyQuote;
+    // Only what is actually on screen: the quote's images are not in the frame
+    // document until it is expanded, so offering to load them would do nothing.
+    const blockedImages = showHtml
+        ? sanitised.blockedImages
+            + (quoteExpanded ? sanitised.blockedImagesInQuote : 0)
+        : 0;
+    const fileAttachments = email.attachments.filter(att => att.inline === 0);
+    // Used both as the plain-text rendition and as the frame's fallback.
+    const textBody = (
+        <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{bodyMain}</p>
+    );
 
     return (
         <div className={cardCls}>
@@ -427,22 +612,40 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
             {email.subject && !email.parent_id && (
                 <div className="text-xs text-white/45 font-sans">{email.subject}</div>
             )}
-            <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{bodyMain}</p>
-            {bodyQuote !== null && (
+            {showHtml ? (
+                <EmailFrame
+                    srcDoc={buildEmailDocument(sanitised, quoteExpanded)}
+                    fallback={textBody}
+                />
+            ) : textBody}
+            {(quoteContent !== null || blockedImages > 0) && (
                 <div className="mt-1">
-                    <button
-                        onClick={() => setQuoteExpanded(v => !v)}
-                        className={`text-xs px-1.5 py-0.5 border transition-colors cursor-pointer font-sans ${quoteExpanded ? 'text-white/70 border-white/45' : 'text-white/40 hover:text-white/65 border-white/25 hover:border-white/45'}`}
-                        title={quoteExpanded ? 'Hide quoted text' : 'Show quoted text'}
-                    >···</button>
-                    {quoteExpanded && (
-                        <p className="text-sm text-white/45 whitespace-pre-wrap leading-relaxed font-sans mt-2 border-l-2 border-white/20 pl-3">{bodyQuote}</p>
+                    <div className="flex items-center gap-2">
+                        {quoteContent !== null && (
+                            <button
+                                onClick={() => setQuoteExpanded(v => !v)}
+                                className={`text-xs px-1.5 py-0.5 border transition-colors cursor-pointer font-sans ${quoteExpanded ? 'text-white/70 border-white/45' : 'text-white/40 hover:text-white/65 border-white/25 hover:border-white/45'}`}
+                                title={quoteExpanded ? 'Hide quoted text' : 'Show quoted text'}
+                            >···</button>
+                        )}
+                        {blockedImages > 0 && (
+                            <button
+                                onClick={() => setLoadImages(true)}
+                                className="text-xs px-1.5 py-0.5 border text-white/40 hover:text-white/65 border-white/25 hover:border-white/45 transition-colors cursor-pointer font-sans"
+                                title="Fetch remote images through the server; the sender learns the message was opened"
+                            >Load images ({blockedImages})</button>
+                        )}
+                    </div>
+                    {/* An HTML quote is rendered inside the frame with the rest of
+                        the message, so only the plain-text path expands here. */}
+                    {quoteExpanded && quoteContent !== null && !showHtml && (
+                        <p className="text-sm text-white/45 whitespace-pre-wrap leading-relaxed font-sans mt-2 border-l-2 border-white/20 pl-3">{quoteContent}</p>
                     )}
                 </div>
             )}
-            {email.attachments.length > 0 && (
+            {fileAttachments.length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {email.attachments.map(att => (
+                    {fileAttachments.map(att => (
                         <AttachmentChip
                             key={att.id}
                             att={att}

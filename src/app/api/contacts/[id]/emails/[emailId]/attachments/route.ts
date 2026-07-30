@@ -53,6 +53,10 @@ export async function POST(
             filename: file.name,
             content_type: contentType,
             size: file.size,
+            // Uploads are always ordinary files; only the receiver writes inline
+            // parts, which come from a cid: reference in an HTML body.
+            content_id: null,
+            inline: 0,
         },
     }, { status: 201 });
 }

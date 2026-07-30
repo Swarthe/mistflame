@@ -28,3 +28,8 @@ next-env.d.ts
 !.dev.vars.example
 wrangler.toml*
 !wrangler.toml.example
+
+# D1 dumps and the generated data migration hold real correspondence.
+dump*.json
+backup*.sql
+db/migrations/*-backfill-*.sql

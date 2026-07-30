@@ -1,4 +1,9 @@
 import PostalMime from 'postal-mime';
+import { htmlToText, htmlToFragment } from '../src/lib/html-to-text.mjs';
+
+// Oversized HTML is dropped rather than truncated: a half-written fragment would
+// render as broken markup. The plain-text body is still stored.
+const MAX_BODY_HTML = 500_000;
 
 interface Env {
     DB: D1Database;
@@ -67,7 +72,14 @@ export default {
             ? (rawInReplyTo.match(/<([^>]+)>/) ?? [])[1] ?? rawInReplyTo
             : null;
         const subject = parsed.subject ?? null;
-        const body = parsed.text ?? parsed.html ?? '';
+
+        // body is the canonical plain-text rendition and is always populated;
+        // body_html holds the HTML alternative as a nestable fragment. When the
+        // sender supplied no text/plain part, the text is derived from the HTML
+        // rather than storing markup in body.
+        let bodyHtml = htmlToFragment(parsed.html);
+        if (bodyHtml !== null && bodyHtml.length > MAX_BODY_HTML) bodyHtml = null;
+        const body = (parsed.text ?? '').trim() || htmlToText(parsed.html);
 
         let contact = await env.DB
             .prepare('SELECT id, name FROM contact WHERE LOWER(email) = ?')
@@ -116,16 +128,21 @@ export default {
         const cc = parsed.cc?.map(a => a.address).filter((a): a is string => !!a).join(', ') || null;
 
         const result = await env.DB
-            .prepare('INSERT INTO email (contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient, cc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            .bind(contact.id, parentId, null, new Date().toISOString(), subject, body.trim(), msgId, recipient, cc)
+            .prepare('INSERT INTO email (contact_id, parent_id, sender, sent_at, subject, body, body_html, message_id, recipient, cc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(contact.id, parentId, null, new Date().toISOString(), subject, body.trim(), bodyHtml, msgId, recipient, cc)
             .run();
 
         const emailId = result.meta.last_row_id;
 
         for (const att of parsed.attachments ?? []) {
-            if (!att.content || att.related) continue;
+            if (!att.content) continue;
             const filename = att.filename ?? 'attachment';
             const contentType = att.mimeType ?? 'application/octet-stream';
+            const contentId = att.contentId ? att.contentId.replace(/^<|>$/g, '') : null;
+            // Only hide a related part from the attachment list once we know the
+            // body actually references it; an unreferenced one would otherwise
+            // vanish from the UI entirely.
+            const isInline = !!(att.related && contentId && bodyHtml?.includes(contentId));
             const r2Key = `${emailId}/${crypto.randomUUID()}-${filename}`;
             const data = att.content instanceof Uint8Array ? att.content : new Uint8Array(att.content as ArrayBuffer);
             if (data.byteLength > 10 * 1024 * 1024) continue;
@@ -133,8 +150,8 @@ export default {
                 httpMetadata: { contentType },
             });
             await env.DB
-                .prepare('INSERT INTO attachment (email_id, file_name, content_type, r2_key, size) VALUES (?, ?, ?, ?, ?)')
-                .bind(emailId, filename, contentType, r2Key, data.byteLength)
+                .prepare('INSERT INTO attachment (email_id, file_name, content_type, r2_key, size, content_id, inline) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                .bind(emailId, filename, contentType, r2Key, data.byteLength, contentId, isInline ? 1 : 0)
                 .run();
         }
 

@@ -11,57 +11,42 @@ This software is intended for solo operators or small teams who need to
 comprehensively manage emails and track conversations without the overhead of a
 full CRM platform.
 
-Deployed entirely on Cloudflare's infrastructure: Workers (compute), D1 (SQLite
-database), KV (session storage), R2 (attachments), and Email Workers (send and
-receive).
+Deployed entirely on Cloudflare's infrastructure with Next.js 16: Workers
+(compute), D1 (SQLite database), KV (session storage), R2 (attachments), and
+Email Workers (send and receive).
 
 ## Features
 
 **Contacts**
-- Add, edit, and delete contacts (name, email, description)
-- Freeform colour-coded tags, fuzzy-searchable from the sidebar
-- Awaiting-reply indicator computer per contact, filterable from the sidebar
+- Add, edit and delete contacts, with freeform colour-coded tags
+- Fuzzy search and an awaiting-reply filter in the sidebar
 
 **Email history**
-- Full email log per contact, grouped by thread
-- Draft emails are editable after creation
-- Reply thread quote blocks are collapsed behind a toggle in the thread view
-- Outgoing emails support CC (stored in DB, delivered separately per address)
+- Complete history per contact, grouped into threads
+- HTML messages are rendered; quoted history collapses behind a toggle
+- Attachments and inline images stored in R2 and shown in the UI
 
 **Sending**
-- Send all pending drafts at once, or send individual emails inline
-- Choose sender address per send; attachments supported (up to 10 MB each, sent
-  as `multipart/mixed`)
-- Sender email is automatically determined for replies to inbound emails
-- Reply quotes blocks are automatically appended at send time
-- Requires the Cloudflare Workers Paid plan (email sending is a beta feature);
-  receiving and viewing emails works without it
+- Compose plain-text drafts, editable until sent; send one at a time or all at
+  once
+- Pick the sender address per email; CC and attachments supported
+- Replies are threaded and quote the message they answer, preserving its HTML
+- Requires the Cloudflare Workers Paid plan; receiving and reading work on the
+  free tier
 
 **Receiving**
-- Inbound emails matched to contacts by sender address
-- Automatic polling and refreshing on new email arrivals
-- Reply threading via `In-Reply-To` header matching with a subject-line fallback
-- Attachments stored in R2 and shown in the UI
-- Unknown senders auto-created as new contacts (name from display name, email
-  from sender address)
-- Optional email notification to one or more addresses when a new inbound
-  message arrives (see `NOTIFY_ADDRS`)
-- Configurable rate limit on inbound emails to guard against spam (see
-  `RATE_LIMIT_MAX`)
+- Inbound mail matched to contacts by sender address, with unknown senders added
+  automatically
+- Threading via `In-Reply-To`, with a subject-line fallback
+- Remote images blocked until you ask for them, so tracking pixels do not fire
+- Optional notification email on arrival (`NOTIFY_ADDRS`) and a configurable
+  inbound rate limit (`RATE_LIMIT_MAX`)
 
 **Access**
-- Single-user: one password, one active session at a time
-- Logging in while a session is active shows a confirmation prompt
-- Optional "Remember me" checkbox keeps authentication alive
+- Single user, one active session at a time, with an optional "Remember me"
 
-## Stack
-
-- **Next.js 16** (App Router)
-- **Cloudflare Workers**: hosting
-- **Cloudflare D1**: contacts and email history
-- **Cloudflare KV**: session storage and spam tracking
-- **Cloudflare R2**: email attachments
-- **Cloudflare Email Workers**: sending and receiving emails
+See [Security](#security) for how HTML email, remote images and authentication
+are handled.
 
 ## Setup
 
@@ -105,7 +90,9 @@ npx wrangler d1 execute mistflame-db --remote --file db/schema.sql
 npx wrangler r2 bucket create mistflame-attachments
 ```
 
-No ID needed, R2 bindings reference the bucket by name.
+No ID needed, R2 bindings reference the bucket by name. The bucket holds
+attachments and the inline images embedded in HTML message bodies; both are
+deleted along with the email or contact they belong to.
 
 ### 5. Email routing
 
@@ -136,30 +123,6 @@ addresses to `SEND_ADDRS` (comma-separated) to send from different domains.
 > Receiving inbound emails, storing them, and viewing the full UI all work
 > without it; only the send action will fail if the binding is unavailable.
 
-### 6. Security
-
-Mistflame serves `robots.txt` with `Disallow: /` for all user agents, and sets
-`X-Robots-Tag: noindex, nofollow` on all HTML responses via `middleware.ts`.
-This prevents search engines and crawlers from indexing the app.
-
-The login endpoint (`/api/auth`) uses a constant-time comparison for password
-verification to prevent timing-based enumeration.
-
-Inbound email attachments are capped at 10 MB each; oversized attachments are
-silently dropped. Draft and sent email bodies are limited to 100,000 characters
-and subjects to 500 characters.
-
-**Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force
-attacks:
-
-1. Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
-2. Fields: **Hostname** equals `your-domain.com` **AND** **URI Path** starts with `/api`
-3. Threshold: 20 requests per 10 seconds per IP (example)
-4. Action: Block, Duration: 10 seconds
-
-Scoping by hostname matters if other workers share the same Cloudflare zone; a
-plain `/api/*` rule also rate-limits API routes on those workers.
-
 ## Configuration
 
 All branding and addresses are set as `[vars]` in `wrangler.toml`, no code
@@ -188,7 +151,7 @@ changes needed to customise the app for a new deployment.
 |---|---|---|
 | `DB` | D1 Database | Contacts and email history |
 | `SESSION` | KV Namespace | Active session marker and auth tokens |
-| `ATTACHMENTS` | R2 Bucket | Inbound and outbound email attachments |
+| `ATTACHMENTS` | R2 Bucket | Email attachments, including inline (`cid:`) images from HTML bodies |
 | `EMAIL_SENDER` | Send Email | Outbound email via Cloudflare Email Workers |
 | `KV` | KV Namespace | Rate limit counters (email receiver only; can share the `SESSION` namespace) |
 | `PASSWORD` | Secret | Login password |
@@ -220,6 +183,39 @@ npx wrangler deploy --config email-receiver/wrangler.toml
 Redeploy this worker whenever `email-receiver/index.ts` changes (`npm run
 deploy` only redeploys the main worker).
 
+## Security
+
+- **Authentication**: a single password, compared in constant time so a wrong
+  guess cannot be distinguished by timing. One active session at a time; logging
+  in elsewhere prompts before displacing the existing one.
+- **HTML email**: inbound HTML is sanitised with DOMPurify and rendered in a
+  sandboxed iframe with scripts disabled, so a sender's markup and stylesheet
+  apply to their message and cannot reach the rest of the app.
+- **Remote images**: blocked by default and replaced with a placeholder, so
+  tracking pixels do not fire when a message is opened. "Load images" fetches
+  them through the worker, so the sender sees a Cloudflare address rather than
+  your IP address; images declaring dimensions of 1x1 are discarded and never
+  load at all. Nothing proxied is stored, so deleting an email leaves no trace
+  of its images.
+- **Indexing**: `robots.txt` serves `Disallow: /` for all user agents, and
+  `middleware.ts` sets `X-Robots-Tag: noindex, nofollow` and a restrictive
+  Content-Security-Policy on every HTML response. That policy is what keeps
+  remote images blocked, so do not loosen `img-src`.
+- **Input limits**: inbound attachments are capped at 10 MB each and oversized
+  ones are dropped; email bodies are limited to 100,000 characters and subjects
+  to 500; proxied images are capped at 5 MB.
+
+**Recommended:** add a Cloudflare WAF rate limiting rule to prevent brute force
+attacks:
+
+1. Dashboard -> Security -> WAF -> Rate limiting rules -> Create rule
+2. Fields: **Hostname** equals `your-domain.com` **AND** **URI Path** starts with `/api`
+3. Threshold: 20 requests per 10 seconds per IP (example)
+4. Action: Block, Duration: 10 seconds
+
+Scoping by hostname matters if other workers share the same Cloudflare zone; a
+plain `/api/*` rule also rate-limits API routes on those workers.
+
 ## Development
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in
@@ -239,25 +235,48 @@ and optionally seed it with example contacts and email threads for testing:
 # Apply schema
 npx wrangler d1 execute DB --local --file db/schema.sql
 
-# Seed with example data (2 contacts, 3 threads covering all email states)
+# Seed with example data (2 contacts, 4 threads covering all email states,
+# including an HTML email with inline, remote and quoted content)
 npx wrangler d1 execute DB --local --file db/seed-local.sql
 
-# Reset all data
-npx wrangler d1 execute DB --local --command "DELETE FROM email; DELETE FROM contact; DELETE FROM tag; DELETE FROM contact_tag; DELETE FROM sqlite_sequence WHERE name IN ('email','contact','tag');"
+# Reset all data (attachments first, or re-seeding hits a primary key conflict)
+npx wrangler d1 execute DB --local --command "DELETE FROM attachment; DELETE FROM email; DELETE FROM contact; DELETE FROM tag; DELETE FROM contact_tag; DELETE FROM sqlite_sequence WHERE name IN ('email','contact','tag','attachment');"
 ```
+
+The seeded HTML email references an inline image, whose bytes have to be put
+into local R2 separately or it renders as a missing image; the comment above
+thread 4 in `db/seed-local.sql` has the one-off command.
 
 All `wrangler d1` commands use the binding name `DB` (not the database name) and
 must be run from the project root. Local state is stored in
 `.wrangler/state/v3/d1/` (gitignored); delete that directory to fully reset the
 database.
 
+A database created before a schema change needs the matching migration from
+`db/migrations/` rather than a fresh `schema.sql` run:
+
+```bash
+npx wrangler d1 execute DB --local --file db/migrations/001-html-email.sql
+```
+
+`db/schema.sql` always describes the current shape, so a database created from
+it already has every migration applied. SQLite has no
+`ADD COLUMN IF NOT EXISTS`, so a migration errors if reapplied; check first with
+`npx wrangler d1 execute DB --local --command "PRAGMA table_info(email)"`.
+
 ## Limitations and missing features
 
 Contributions and feature requests are welcome. The following features are not
 currently implemented.
 
-- **HTML email rendering**: inbound emails are displayed as plain text; HTML
-  parts are not rendered
+- **Rich-text composing**: the composer is plain text only. Replies to HTML
+  emails carry an HTML part so the quote chain survives, but your own words in
+  the reply are not formatted
+- **Inline images in quoted history**: `cid:` images are dropped from the quote
+  of an outgoing reply, since their Content-ID belongs to the received message.
+  A full mail client re-attaches those parts; this one does not
+- **Remote images in CSS**: `url(...)` backgrounds in inline styles stay blocked
+  even after "Load images"; only `<img>` elements are proxied
 - **Full email search**: no full-text search across email bodies or subjects
 - **Contact import/export**: no CSV or vCard import/export
 - **Pagination**: long contact lists and email histories are loaded in full
@@ -266,7 +285,7 @@ currently implemented.
 - **Scheduled sending**: no support for sending emails at a scheduled time
 - **Multi-user access**: single-user only by design; no role-based access or
   shared sessions
-- **Change tracking for polling**: the client polls every 5 seconds for new
+- **Change tracking for polling**: the client polls every 10 seconds for new
   data, fetching full contact and email lists each time. A lightweight change
   indicator (e.g. a KV-stored timestamp updated on mutation) would let the
   client skip expensive refetches when nothing has changed
@@ -282,6 +301,17 @@ currently implemented.
   ```bash
   npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD COLUMN notes TEXT"
   ```
+- Numbered migrations live in `db/migrations/` and are applied in order to
+  existing deployments; `db/schema.sql` is kept in step for fresh installs.
+  Take a backup first:
+  ```bash
+  npx wrangler d1 export mistflame-db --remote --output backup.sql
+  ```
+- Emails received before HTML rendering existed have raw markup stored in their
+  body column. `scripts/backfill-html-bodies.mjs` converts those rows into a
+  readable text body plus the HTML fragment; it reads a D1 dump and writes SQL
+  for review rather than touching the database itself. Its inputs and output
+  contain real correspondence and are gitignored
 
 ## License
 

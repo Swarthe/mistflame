@@ -30,7 +30,8 @@ CREATE TABLE email (
     sender         TEXT,
     sent_at        TEXT,             -- NULL = unsent draft
     subject        TEXT,
-    body           TEXT    NOT NULL,
+    body           TEXT    NOT NULL, -- canonical plain-text rendition; always populated
+    body_html      TEXT,             -- HTML body fragment; NULL = plain text only
     message_id     TEXT,             -- SMTP Message-ID; NULL for drafts, set on send/receive
     recipient      TEXT,             -- inbound only: the Mistflame address that received the email
     cc             TEXT,             -- comma-separated addresses
@@ -45,5 +46,7 @@ CREATE TABLE attachment (
     content_type   TEXT    NOT NULL,
     r2_key         TEXT    NOT NULL, -- R2 object key: "<email_id>/<uuid>-<filename>"
     size           INTEGER NOT NULL,
+    content_id     TEXT,             -- Content-ID of an inline part, angle brackets stripped
+    inline         INTEGER NOT NULL DEFAULT 0, -- 1 = referenced from body_html via cid:
     FOREIGN KEY (email_id) REFERENCES email (id) ON DELETE CASCADE
 );

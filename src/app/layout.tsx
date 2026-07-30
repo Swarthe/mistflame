@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { DM_Sans, Libre_Baskerville } from 'next/font/google';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 import './globals.css';
-import { ThemeProvider } from 'next-themes';
 
 const dmSans = DM_Sans({
     variable: '--font-dm-sans',
@@ -25,21 +24,17 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+    // The app is dark-only, so the `dark` class is set here rather than by a
+    // theme provider. It has to be present in the server-rendered HTML: the
+    // colour variables in globals.css default to a light palette under :root, so
+    // a class applied only after hydration means the first paint is white.
     return (
         <html
             lang="en"
-            className={`${dmSans.variable} ${libreBaskerville.variable} h-full antialiased`}
-            suppressHydrationWarning
+            className={`dark ${dmSans.variable} ${libreBaskerville.variable} h-full antialiased`}
         >
-            <body suppressHydrationWarning className="min-h-full flex flex-col bg-background text-foreground">
-                <ThemeProvider
-                    attribute="class"
-                    defaultTheme="dark"
-                    enableSystem={false}
-                    forcedTheme="dark"
-                >
-                    {children}
-                </ThemeProvider>
+            <body className="min-h-full flex flex-col bg-background text-foreground">
+                {children}
             </body>
         </html>
     );

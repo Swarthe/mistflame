@@ -81,3 +81,22 @@
     @apply font-sans;
   }
 }
+
+/*
+ * Container for the HTML email frame (see EmailFrame in page.tsx).
+ *
+ * The message itself is styled inside the frame document by FRAME_STYLES in
+ * src/lib/email-html.ts, where the browser's own defaults apply and Tailwind's
+ * preflight cannot reach it. That isolation is the point: it replaced a long
+ * stylesheet here that existed only to restore list markers, heading sizes and
+ * inline images after preflight had flattened them.
+ *
+ * The height is set from the content by EmailFrame, so the frame must not
+ * introduce a border or baseline gap of its own.
+ */
+.mf-email-frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}

@@ -17,7 +17,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                 SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
             )
             SELECT e.id, e.contact_id, e.parent_id, e.sender, e.sent_at, e.subject,
-                   e.body, e.message_id, e.recipient, e.cc, r.thread_id
+                   e.body, e.body_html, e.message_id, e.recipient, e.cc, r.thread_id
             FROM email e JOIN ranked r ON e.id = r.id
             ORDER BY e.sent_at ASC NULLS LAST
         `)
@@ -25,14 +25,14 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         .all<{ id: number; thread_id: number }>();
 
     const { results: attachments } = await env.DB
-        .prepare('SELECT id, email_id, file_name AS filename, content_type, size FROM attachment WHERE email_id IN (SELECT id FROM email WHERE contact_id = ?)')
+        .prepare('SELECT id, email_id, file_name AS filename, content_type, size, content_id, inline FROM attachment WHERE email_id IN (SELECT id FROM email WHERE contact_id = ?)')
         .bind(contactId)
-        .all<{ id: number; email_id: number; filename: string; content_type: string; size: number }>();
+        .all<{ id: number; email_id: number; filename: string; content_type: string; size: number; content_id: string | null; inline: number }>();
 
-    const attMap = new Map<number, { id: number; filename: string; content_type: string; size: number }[]>();
+    const attMap = new Map<number, { id: number; filename: string; content_type: string; size: number; content_id: string | null; inline: number }[]>();
     for (const att of attachments) {
         const list = attMap.get(att.email_id) ?? [];
-        list.push({ id: att.id, filename: att.filename, content_type: att.content_type, size: att.size });
+        list.push({ id: att.id, filename: att.filename, content_type: att.content_type, size: att.size, content_id: att.content_id, inline: att.inline });
         attMap.set(att.email_id, list);
     }
 
@@ -121,6 +121,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 sent_at: null,
                 subject,
                 body: emailBody.trim(),
+                // Composed drafts are plain text; an HTML alternative is only
+                // generated at send time when the parent has one.
+                body_html: null,
                 recipient: null,
                 cc,
             },
