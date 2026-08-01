@@ -753,6 +753,13 @@ function NewEmailCard({ replyTo, contactName, orgName, sendAddrs, threadSender, 
 
 // ─── Main page ─────────────────────────────────────────────────────────────────
 
+const POLL_INTERVAL_MS = 5_000;
+
+// A refetch is forced this often regardless of the revision, so a write path
+// that ever lands without a trigger behind it degrades to a slow refresh rather
+// than a stuck view.
+const FALLBACK_REFRESH_MS = 60_000;
+
 export default function OutreachPage() {
     const router = useRouter();
     const apiFetch = (...args: Parameters<typeof fetch>): Promise<Response> =>
@@ -787,6 +794,12 @@ export default function OutreachPage() {
     const [sendingEmails, setSendingEmails] = useState(false);
     const [pendingCount, setPendingCount] = useState<number | null>(null);
     const [sendResult, setSendResult] = useState<{ sent: number; failed: number; errors: string[] } | null>(null);
+
+    // Last revision the currently held data was read against, and when the last
+    // unconditional refetch happened. Refs, not state: the poll reads them
+    // without needing to re-render or restart its interval.
+    const lastRevision = useRef<number | null>(null);
+    const lastFullRefresh = useRef(0);
 
     const selectedContact = contacts.find(c => c.id === selectedId) ?? null;
     const orgName = config?.orgName || 'Mistflame';
@@ -842,6 +855,11 @@ export default function OutreachPage() {
             .finally(() => setLoadingContacts(false));
     };
 
+    const fetchRevision = (): Promise<number | null> =>
+        apiFetch('/api/revision')
+            .then(r => json<{ revision?: number | null }>(r))
+            .then(data => data.revision ?? null);
+
     useEffect(() => {
         apiFetch('/api/config')
             .then(r => r.json())
@@ -849,6 +867,13 @@ export default function OutreachPage() {
             .catch(() => {});
         fetchContacts();
         fetchPendingCount();
+        // Start the fallback clock here, so the first poll goes through the
+        // revision check rather than straight to a refetch.
+        lastFullRefresh.current = Date.now();
+        // lastRevision is deliberately left unset: the first poll then always
+        // refetches, which picks up anything written while the page was
+        // loading. Recording it here would race the two fetches above and could
+        // store a revision newer than the data they returned.
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
@@ -859,14 +884,31 @@ export default function OutreachPage() {
     }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
-        if (selectedId === null) return;
-        const poll = () => {
-            if (document.visibilityState !== 'visible') return;
-            fetchEmails(selectedId);
+        const refreshAll = () => {
+            lastFullRefresh.current = Date.now();
+            if (selectedId !== null) fetchEmails(selectedId);
             refreshContacts();
             fetchPendingCount();
         };
-        const interval = setInterval(poll, 5_000);
+        const poll = () => {
+            if (document.visibilityState !== 'visible') return;
+            if (Date.now() - lastFullRefresh.current >= FALLBACK_REFRESH_MS) {
+                refreshAll();
+                return;
+            }
+            // The revision is recorded before the lists are read, so a write
+            // landing between the two still reads as a change on the next poll.
+            // The cost of that ordering is the occasional redundant refetch,
+            // which is the right way round to be wrong.
+            fetchRevision()
+                .then(revision => {
+                    if (revision !== null && revision === lastRevision.current) return;
+                    lastRevision.current = revision;
+                    refreshAll();
+                })
+                .catch(() => {});
+        };
+        const interval = setInterval(poll, POLL_INTERVAL_MS);
         document.addEventListener('visibilitychange', poll);
         return () => {
             clearInterval(interval);

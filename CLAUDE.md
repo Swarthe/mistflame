@@ -9,7 +9,7 @@
 
 ## Checks
 - Typecheck: `npx tsc --noEmit`
-- Lint: `npx eslint`. `page.tsx` has three pre-existing `react-hooks/set-state-in-effect` errors in the mount and polling effects; do not treat a clean run as the baseline.
+- Lint: `npx eslint src`. `page.tsx` has three pre-existing errors; do not treat a clean run as the baseline. Two are `react-hooks/set-state-in-effect` in the mount and contact-selection effects, the third is `react-hooks/immutability` for the poll effect calling `refreshContacts` above its declaration. Run it against `src`: a bare `npx eslint` also walks `.next/` and `.open-next/` and reports thousands of problems from build output.
 - No test suite. Verify changes manually via `npm run preview`.
 - `wrangler.toml` and `email-receiver/wrangler.toml` are gitignored. Copy from the `.example` files before running preview:
   ```
@@ -57,7 +57,9 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 ## Database
 - D1 (SQLite). FK constraints declared in `db/schema.sql` but **not enforced at runtime**; cascading deletes are done manually in route handlers.
 - Schema changes (remote): `npx wrangler d1 execute mistflame-db --remote --file <file>` for SQL files, or `--command "ALTER TABLE ..."` for single statements.
-- `db/migrations/` holds numbered migrations for existing deployments; `db/schema.sql` always describes the current shape for fresh installs. Both must be updated together. SQLite has no `ADD COLUMN IF NOT EXISTS`, so rerunning a migration errors rather than doing nothing; check with `PRAGMA table_info(<table>)` first.
+- `db/migrations/` holds numbered migrations for existing deployments; `db/schema.sql` always describes the current shape for fresh installs. Both must be updated together. SQLite has no `ADD COLUMN IF NOT EXISTS`, so rerunning `001-html-email.sql` errors rather than doing nothing; check with `PRAGMA table_info(<table>)` first. `002-indexes.sql` and `003-revision.sql` use `IF NOT EXISTS`/`INSERT OR IGNORE` throughout and are safe to rerun.
+- **Indexes** (`002-indexes.sql`) exist for the paths the client polls and the receiver runs per inbound message; there were none before. Four are partial or expression indexes and are load-bearing rather than incidental: `idx_email_inbound` (`WHERE sender IS NULL`) serves the `awaiting_reply` subquery, `idx_email_draft` (`WHERE sent_at IS NULL AND sender IS NOT NULL`) the pending-send count and the send query, and `idx_contact_email_lower`/`idx_tag_name_lower` exist because the `LOWER(email)` and `LOWER(name)` lookups cannot use the UNIQUE indexes. Check a query with `EXPLAIN QUERY PLAN` before assuming an index applies.
+- **`meta` table and revision triggers** (`003-revision.sql`): `meta` holds one row, `('revision', n)`, bumped by an `AFTER INSERT/UPDATE/DELETE` trigger on every user-visible table. See "Polling" under Client state. Triggers rather than bumps in the route handlers, because the receiver worker writes to D1 directly and never goes through the API, and a write path added later would otherwise be invisible to the client. Nothing writes to `meta` except those triggers, so there is no recursion. A new table whose contents the UI shows needs its own trigger pair.
 - **Local D1 commands** (use the binding name `DB`, not the database name; all commands run from the mistflame directory):
   ```
   # Apply schema to local dev database
@@ -231,9 +233,15 @@ The `REMEMBER_COOKIE` constant is defined identically in both `middleware.ts` an
 All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined inside `OutreachPage`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).
 
 ## Client state (page.tsx)
-- **Polling**: a 10-second `setInterval` polls `/api/contacts/{id}/emails`, `/api/contacts`, and `/api/send-emails` while the tab is visible. A `visibilitychange` listener pauses polling when the tab is hidden and fires an immediate poll when it becomes visible again. Do not remove this without an alternative refresh mechanism.
+- **Polling**: a 5-second `setInterval` (`POLL_INTERVAL_MS`) reads `/api/revision`, and only when that counter has moved does it refetch `/api/contacts/{id}/emails`, `/api/contacts` and `/api/send-emails`. An idle tab therefore costs one indexed row read per tick instead of three list queries. A `visibilitychange` listener pauses polling when the tab is hidden and fires an immediate poll when it becomes visible again. Do not remove this without an alternative refresh mechanism.
+  - The counter comes from the `meta` table via triggers (see Database), so **any new write path is covered automatically**; a new *table* the UI reads is not, and needs its own triggers.
+  - Two refs, not state, so the poll reads them without restarting its interval: `lastRevision` (the revision the held data was read against) and `lastFullRefresh`. The revision is recorded *before* the lists are refetched, so a write landing between the two still reads as a change on the next poll; the cost is an occasional redundant refetch, which is the right way round to be wrong.
+  - `lastRevision` is deliberately left unset at mount. The first poll then always refetches, which picks up anything written while the page was loading; recording it in the mount effect would race the initial list fetches and could store a revision newer than the data they returned.
+  - `FALLBACK_REFRESH_MS` (60 s) forces a refetch regardless of the revision, so a missing trigger degrades to a slow refresh rather than a stuck view.
+  - `/api/revision` returns `revision: null` rather than an error when the `meta` row is missing, and the client treats null as "unknown" and refetches. A deployment whose database predates migration 003 therefore behaves as it did before, just without the saving.
+  - The poll effect runs whether or not a contact is selected; only the emails fetch is skipped when `selectedId` is null. It used to return early, which left the contact list and the pending badge stale on the empty state. With the revision gate that no longer costs anything.
 - **Contact persistence**: the selected contact ID is stored in `localStorage` under the key `mf_contact` and restored on mount. This survives page reloads and browser restarts.
-- **HTML bodies**: `useSanitisedHtml` memoises on a `cidKey` built from the attachment ids and content IDs rather than on the array itself, because polling hands back a fresh array every 10 seconds and would otherwise re-sanitise and rebuild the injected DOM on every tick.
+- **HTML bodies**: `useSanitisedHtml` memoises on a `cidKey` built from the attachment ids and content IDs rather than on the array itself, because a poll that does refetch hands back a fresh array and would otherwise re-sanitise and rebuild the injected DOM.
 
 ## CC delivery
 Outgoing CC addresses are stored as a comma-separated string in the `cc` column. At send time (`send-emails/route.ts`), the raw email is delivered separately to each CC address (one `EMAIL_SENDER.send()` call per address) rather than relying on the SMTP `Cc:` header for delivery. The `Cc:` header is still included in each copy for recipient visibility.

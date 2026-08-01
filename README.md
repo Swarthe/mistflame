@@ -257,12 +257,32 @@ A database created before a schema change needs the matching migration from
 
 ```bash
 npx wrangler d1 execute DB --local --file db/migrations/001-html-email.sql
+npx wrangler d1 execute DB --local --file db/migrations/002-indexes.sql
+npx wrangler d1 execute DB --local --file db/migrations/003-revision.sql
 ```
 
 `db/schema.sql` always describes the current shape, so a database created from
 it already has every migration applied. SQLite has no
-`ADD COLUMN IF NOT EXISTS`, so a migration errors if reapplied; check first with
-`npx wrangler d1 execute DB --local --command "PRAGMA table_info(email)"`.
+`ADD COLUMN IF NOT EXISTS`, so 001 errors if reapplied; check first with
+`npx wrangler d1 execute DB --local --command "PRAGMA table_info(email)"`. 002
+and 003 use `IF NOT EXISTS` throughout and are safe to rerun.
+
+## Polling
+
+The client checks for new mail every five seconds. Rather than refetching the
+contact list, the open thread and the pending-send count each time, it reads a
+single counter from `GET /api/revision` and only refetches when that number has
+moved.
+
+The counter lives in the `meta` table and is maintained by SQLite triggers on
+`contact`, `tag`, `contact_tag`, `email` and `attachment`. Triggers rather than
+explicit bumps in the route handlers, because the email receiver is a separate
+worker that writes to D1 directly and never goes through the API.
+
+An idle tab therefore costs one indexed row read per poll. As a safety net, a
+full refetch happens once a minute regardless, so a write path that ever lands
+without a trigger behind it degrades to a slow refresh rather than a stuck view.
+Polling pauses entirely while the tab is hidden.
 
 ## Limitations and missing features
 
@@ -285,10 +305,9 @@ currently implemented.
 - **Scheduled sending**: no support for sending emails at a scheduled time
 - **Multi-user access**: single-user only by design; no role-based access or
   shared sessions
-- **Change tracking for polling**: the client polls every 10 seconds for new
-  data, fetching full contact and email lists each time. A lightweight change
-  indicator (e.g. a KV-stored timestamp updated on mutation) would let the
-  client skip expensive refetches when nothing has changed
+- **Push updates**: new mail appears through polling rather than a push, so it
+  can take up to five seconds to show. The poll itself is a single-row read
+  (see "Polling" below), but there is no WebSocket or SSE channel
 
 ## Notes
 
