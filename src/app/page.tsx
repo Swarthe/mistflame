@@ -474,7 +474,15 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
 }) {
     const isUs = email.sender !== null;
     const [editing, setEditing] = useState(false);
-    useEffect(() => { onEditingChange(editing); }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Registered only while actually editing: reporting `false` on mount would
+    // clear the page's editing state for a *different* card whenever a new
+    // email arrives mid-edit. The cleanup also unregisters when the card
+    // unmounts.
+    useEffect(() => {
+        if (!editing) return;
+        onEditingChange(true);
+        return () => onEditingChange(false);
+    }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
     const [editSenderAddr, setEditSenderAddr] = useState(email.sender ?? sendAddrs[0] ?? '');
     const [editSubject, setEditSubject] = useState(email.subject ?? '');
     const [editBody, setEditBody] = useState(email.body);
@@ -817,7 +825,10 @@ export default function OutreachPage() {
     const [selectedId, setSelectedId] = useState<number | null>(() => {
         if (typeof window === 'undefined') return null;
         const stored = localStorage.getItem('mf_contact');
-        return stored ? parseInt(stored, 10) : null;
+        const parsed = stored ? parseInt(stored, 10) : NaN;
+        // A corrupt stored value must not become a NaN id and fetch
+        // /api/contacts/NaN/emails on every poll.
+        return Number.isNaN(parsed) ? null : parsed;
     });
     const [emails, setEmails] = useState<EmailRecord[]>([]);
     const [loadingContacts, setLoadingContacts] = useState(true);
@@ -855,6 +866,10 @@ export default function OutreachPage() {
     // without needing to re-render or restart its interval.
     const lastRevision = useRef<number | null>(null);
     const lastFullRefresh = useRef(0);
+    // Mirror of selectedId for in-flight email fetches: a slow response for a
+    // contact the user has already switched away from must not overwrite the
+    // new contact's thread. Kept in step by the selectedId effect below.
+    const selectedIdRef = useRef<number | null>(selectedId);
 
     const selectedContact = contacts.find(c => c.id === selectedId) ?? null;
     const orgName = config?.orgName || 'Mistflame';
@@ -878,6 +893,7 @@ export default function OutreachPage() {
         apiFetch(`/api/contacts/${id}/emails`)
             .then(r => json<{ emails?: EmailRecord[] }>(r))
             .then(data => {
+                if (selectedIdRef.current !== id) return;
                 setEmails(prev => {
                     const next = data.emails ?? [];
                     return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
@@ -973,6 +989,7 @@ export default function OutreachPage() {
     }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     useEffect(() => {
+        selectedIdRef.current = selectedId;
         if (selectedId === null) localStorage.removeItem('mf_contact');
         else localStorage.setItem('mf_contact', String(selectedId));
     }, [selectedId]);
@@ -1258,23 +1275,24 @@ export default function OutreachPage() {
     };
 
     const sendSingleEmail = async (emailId: number) => {
-        const res = await apiFetch('/api/send-emails', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email_id: emailId }),
-        });
-        if (res.ok) {
-            refreshPendingCount();
-            if (selectedId !== null) {
-                apiFetch(`/api/contacts/${selectedId}/emails`)
-                    .then(r => r.ok ? r.json() : Promise.reject())
-                    .then((data: unknown) => setEmails(((data as { emails?: EmailRecord[] }).emails) ?? []))
-                    .catch(() => {});
+        setApiError(null);
+        try {
+            const res = await apiFetch('/api/send-emails', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email_id: emailId }),
+            });
+            const data = (await res.json()) as { sent?: number; failed?: number; errors?: string[]; error?: string };
+            // The endpoint reports send failures inside the body of a 200, so
+            // res.ok alone would read a failed send as success and say nothing.
+            if (!res.ok || (data.failed ?? 0) > 0 || (data.errors?.length ?? 0) > 0 || (data.sent ?? 0) === 0) {
+                setApiError(data.errors?.length ? data.errors.join('; ') : (data.error ?? 'The email was not sent.'));
             }
+            refreshPendingCount();
+            if (selectedId !== null) fetchEmails(selectedId);
             refreshContacts();
-        } else {
-            const data = (await res.json()) as { error?: string };
-            throw new Error(data.error ?? 'Failed to send');
+        } catch {
+            setApiError('Network error — could not reach the server.');
         }
     };
 
@@ -1309,12 +1327,7 @@ export default function OutreachPage() {
         if (res.ok) {
             const data = (await res.json()) as { deleted?: number };
             if ((data.deleted ?? 1) > 1) {
-                if (selectedId !== null) {
-                    apiFetch(`/api/contacts/${selectedId}/emails`)
-                        .then(r => r.ok ? r.json() : Promise.reject())
-                        .then((d: unknown) => setEmails(((d as { emails?: EmailRecord[] }).emails) ?? []))
-                        .catch(() => {});
-                }
+                if (selectedId !== null) fetchEmails(selectedId);
             } else {
                 setEmails(prev => prev.filter(e => e.id !== id));
             }
@@ -1643,7 +1656,11 @@ export default function OutreachPage() {
                                                 ))}
                                                 {addingEmail && replyToEmail?.thread_id === threadId && (
                                                     <div ref={composeRef}>
+                                                        {/* Keyed by the reply target: switching to another
+                                                            email in the same thread must remount the card,
+                                                            or its subject and CC keep the old target's. */}
                                                         <NewEmailCard
+                                                            key={replyToEmail?.id}
                                                             replyTo={replyToEmail}
                                                             contactName={selectedContact.name}
                                                             orgName={orgName}

@@ -1,4 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { encodeHeaderText } from '@/lib/mime';
 
 interface PendingEmail {
     id: number;
@@ -26,6 +27,13 @@ interface DbAttachment {
 const generateMessageId = (domain: string) =>
     `${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}`;
 
+/**
+ * RFC 2045 token "/" token. Attachment content types come from the uploader's
+ * browser via file.type, so anything that does not look like a media type is
+ * replaced before it can reach a raw MIME header.
+ */
+const MIME_TYPE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
 function toBase64Lines(buffer: ArrayBuffer | Uint8Array): string {
     const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
     let binary = '';
@@ -40,7 +48,8 @@ function toBase64Lines(buffer: ArrayBuffer | Uint8Array): string {
 /**
  * The text and HTML renditions of the same message. Base64 for the HTML part so
  * that non-ASCII content survives regardless of the receiving server's 8BITMIME
- * support; the text part keeps the encoding it has always used.
+ * support; the text part stays readable in the raw message and declares 8bit,
+ * since undeclared non-ASCII defaults to 7bit and may be mangled in transit.
  */
 function alternativeLines(boundary: string, body: string, htmlBody: string): string[] {
     return [
@@ -48,6 +57,7 @@ function alternativeLines(boundary: string, body: string, htmlBody: string): str
         '',
         `--${boundary}`,
         'Content-Type: text/plain; charset=UTF-8',
+        'Content-Transfer-Encoding: 8bit',
         '',
         body,
         `--${boundary}`,
@@ -74,6 +84,7 @@ function buildRaw(
                 ...headerLines,
                 'MIME-Version: 1.0',
                 'Content-Type: text/plain; charset=UTF-8',
+                'Content-Transfer-Encoding: 8bit',
                 '',
                 body,
             ].join('\r\n');
@@ -97,16 +108,24 @@ function buildRaw(
     // With an HTML alternative the message body becomes a nested
     // multipart/alternative as the first part of the multipart/mixed.
     if (htmlBody === null) {
-        lines.push('Content-Type: text/plain; charset=UTF-8', '', body);
+        lines.push(
+            'Content-Type: text/plain; charset=UTF-8',
+            'Content-Transfer-Encoding: 8bit',
+            '',
+            body,
+        );
     } else {
         lines.push(...alternativeLines(altBoundary, body, htmlBody));
     }
 
     for (const att of attachments) {
         const safeName = att.filename.replace(/["\r\n]/g, '_');
+        const safeType = MIME_TYPE.test(att.content_type)
+            ? att.content_type
+            : 'application/octet-stream';
         lines.push(
             `--${boundary}`,
-            `Content-Type: ${att.content_type}; name="${safeName}"`,
+            `Content-Type: ${safeType}; name="${safeName}"`,
             `Content-Disposition: attachment; filename="${safeName}"`,
             'Content-Transfer-Encoding: base64',
             '',
@@ -271,11 +290,13 @@ export async function POST(request: Request) {
                 }
             }
 
+            // CR/LF is stripped above; encodeHeaderText handles non-ASCII, which
+            // would otherwise ride on undeclared 8-bit bytes in the headers.
             const headerLines = [
-                `From: ${senderName} <${from}>`,
-                `To: ${safeName} <${email.contact_email}>`,
+                `From: ${encodeHeaderText(senderName)} <${from}>`,
+                `To: ${encodeHeaderText(safeName)} <${email.contact_email}>`,
                 `Message-ID: <${msgId}>`,
-                `Subject: ${safeSubject}`,
+                `Subject: ${encodeHeaderText(safeSubject)}`,
             ];
 
             if (email.cc) {
@@ -298,13 +319,10 @@ export async function POST(request: Request) {
             const raw = buildRaw(headerLines, bodyNormalised, htmlBody, attachmentData);
             await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, email.contact_email, raw));
 
-            if (email.cc) {
-                const ccAddrs = email.cc.split(',').map((a: string) => a.trim()).filter(Boolean);
-                for (const addr of ccAddrs) {
-                    await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, addr, raw));
-                }
-            }
-
+            // The row is marked sent as soon as the contact has the message,
+            // before the CC copies go out: a CC failure after this point is
+            // reported but must not leave the row unsent, or the next attempt
+            // would deliver the same message to the contact a second time.
             if (bodyForStorage !== null) {
                 // The plain-text rendition with the quote appended is stored; the
                 // generated HTML deliberately is not. Nothing needs it: our own
@@ -327,6 +345,18 @@ export async function POST(request: Request) {
             }
 
             sent++;
+
+            if (email.cc) {
+                const ccAddrs = email.cc.split(',').map((a: string) => a.trim()).filter(Boolean);
+                for (const addr of ccAddrs) {
+                    try {
+                        await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, addr, raw));
+                    } catch (ccErr) {
+                        const msg = ccErr instanceof Error ? ccErr.message : String(ccErr);
+                        errors.push(`${email.contact_name}: CC copy to ${addr} failed: ${msg}`);
+                    }
+                }
+            }
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             errors.push(`${email.contact_name}: ${msg}`);

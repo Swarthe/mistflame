@@ -26,6 +26,16 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 
     const { env } = await getCloudflareContext({ async: true });
 
+    // Same reasoning as the POST handler: the UNIQUE constraint is
+    // case-sensitive, so case variants must be rejected here.
+    const duplicate = await env.DB
+        .prepare('SELECT id FROM contact WHERE LOWER(email) = LOWER(?) AND id != ?')
+        .bind(email.trim(), contactId)
+        .first();
+    if (duplicate) {
+        return Response.json({ ok: false, error: 'A contact with this email already exists.' }, { status: 409 });
+    }
+
     let result;
     try {
         result = await env.DB
@@ -68,29 +78,20 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
 
     await Promise.all(attachments.map(att => env.ATTACHMENTS.delete(att.r2_key)));
 
-    await env.DB
-        .prepare('DELETE FROM attachment WHERE email_id IN (SELECT id FROM email WHERE contact_id = ?)')
-        .bind(contactId)
-        .run();
-    await env.DB
-        .prepare('DELETE FROM email WHERE contact_id = ?')
-        .bind(contactId)
-        .run();
-    await env.DB
-        .prepare('DELETE FROM contact_tag WHERE contact_id = ?')
-        .bind(contactId)
-        .run();
+    // One batch, one transaction: a failure midway rolls the lot back rather
+    // than leaving emails without their contact. The R2 deletes above stay
+    // best-effort either way.
+    const results = await env.DB.batch([
+        env.DB.prepare('DELETE FROM attachment WHERE email_id IN (SELECT id FROM email WHERE contact_id = ?)').bind(contactId),
+        env.DB.prepare('DELETE FROM email WHERE contact_id = ?').bind(contactId),
+        env.DB.prepare('DELETE FROM contact_tag WHERE contact_id = ?').bind(contactId),
+        env.DB.prepare('DELETE FROM contact WHERE id = ?').bind(contactId),
+        env.DB.prepare('DELETE FROM tag WHERE id NOT IN (SELECT tag_id FROM contact_tag)'),
+    ]);
 
-    const result = await env.DB
-        .prepare('DELETE FROM contact WHERE id = ?')
-        .bind(contactId)
-        .run();
-
-    if (result.meta.changes === 0) {
+    if ((results[3].meta.changes ?? 0) === 0) {
         return Response.json({ ok: false, error: 'Contact not found.' }, { status: 404 });
     }
-
-    await env.DB.prepare('DELETE FROM tag WHERE id NOT IN (SELECT tag_id FROM contact_tag)').run();
 
     return Response.json({ ok: true });
 }

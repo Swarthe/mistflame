@@ -68,11 +68,18 @@ export async function DELETE(request: Request) {
     try {
         const { env } = await getCloudflareContext({ async: true });
         if (!env.DEV_MODE) {
-            await env.SESSION.delete(SESSION_KEY);
             const cookieHeader = request.headers.get('Cookie') ?? '';
             const rememberMatch = cookieHeader.match(new RegExp(`${REMEMBER_COOKIE}=([^;]+)`));
             if (rememberMatch) {
                 await env.SESSION.delete(`remember:${rememberMatch[1]}`);
+                // The active-session marker is only cleared when it is ours: a
+                // displaced session logging out must not erase the marker of
+                // the session that displaced it, which would silently disable
+                // the overlap warning for the next login.
+                const current = await env.SESSION.get(SESSION_KEY);
+                if (current === rememberMatch[1]) {
+                    await env.SESSION.delete(SESSION_KEY);
+                }
             }
         }
     } catch {

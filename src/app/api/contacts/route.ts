@@ -77,6 +77,17 @@ export async function POST(request: Request) {
 
     const { env } = await getCloudflareContext({ async: true });
 
+    // The UNIQUE constraint on contact.email is case-sensitive, so a case
+    // variant of an existing address would slip past it and leave the
+    // receiver's LOWER(email) lookup matching one of two contacts arbitrarily.
+    const duplicate = await env.DB
+        .prepare('SELECT id FROM contact WHERE LOWER(email) = LOWER(?)')
+        .bind(email.trim())
+        .first();
+    if (duplicate) {
+        return Response.json({ ok: false, error: 'A contact with this email already exists.' }, { status: 409 });
+    }
+
     let result;
     try {
         result = await env.DB

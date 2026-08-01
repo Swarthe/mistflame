@@ -1,4 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { isValidEmail } from '@/app/api/contacts/route';
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
@@ -47,7 +48,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const sender = typeof body?.sender === 'string' ? body.sender : null;
-    const subject = body?.subject ?? null;
+    // Anything other than a string (a JSON number, say) would otherwise be
+    // bound into the row as-is.
+    const subject = typeof body?.subject === 'string' ? body.subject : null;
     const emailBody = body?.body;
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
     const rawParentId = body?.parent_id;
@@ -61,8 +64,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (emailBody.length > 100_000) {
         return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
     }
-    if (typeof subject === 'string' && subject.length > 500) {
+    if (subject !== null && subject.length > 500) {
         return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
+    }
+    // Validated here rather than only in the client, because an invalid CC
+    // address surfaces at send time, where its EmailMessage would fail after
+    // the contact's copy has already been delivered.
+    if (cc && cc.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a))) {
+        return Response.json({ ok: false, error: 'Invalid CC address.' }, { status: 400 });
     }
 
     const parent_id = rawParentId != null ? parseInt(String(rawParentId), 10) : null;

@@ -65,5 +65,7 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-    matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+    // robots.txt is excluded so crawlers can actually read it; behind the auth
+    // wall it would redirect to /login and never be served.
+    matcher: ['/((?!_next/static|_next/image|favicon.ico|robots.txt).*)'],
 };

@@ -16,6 +16,7 @@
 const MAX_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 10_000;
 const CACHE_TTL_SECONDS = 86_400;
+const MAX_REDIRECTS = 3;
 
 /** Image subtypes are echoed into a response header, so keep the charset tight. */
 const IMAGE_TYPE = /^image\/[a-z0-9][a-z0-9.+-]*$/;
@@ -66,17 +67,29 @@ export async function GET(request: Request) {
     const reason = rejectReason(target);
     if (reason) return fail(400, reason);
 
+    // Redirects are followed by hand so every hop passes the same guards: the
+    // checks above vetted the URL the email supplied, not wherever that URL
+    // chooses to point next.
     let upstream: Response;
     try {
-        upstream = await fetch(target.toString(), {
-            redirect: 'follow',
-            signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-            headers: { Accept: 'image/*' },
-            // cacheTtl overrides the origin's own cache headers, which matters
-            // because the servers hosting marketing images routinely send
-            // no-store and would otherwise be refetched on every view.
-            cf: { cacheEverything: true, cacheTtl: CACHE_TTL_SECONDS },
-        });
+        let current = target;
+        for (let hop = 0; ; hop++) {
+            upstream = await fetch(current.toString(), {
+                redirect: 'manual',
+                signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+                headers: { Accept: 'image/*' },
+                // cacheTtl overrides the origin's own cache headers, which matters
+                // because the servers hosting marketing images routinely send
+                // no-store and would otherwise be refetched on every view.
+                cf: { cacheEverything: true, cacheTtl: CACHE_TTL_SECONDS },
+            });
+            const location = upstream.headers.get('location');
+            if (upstream.status < 300 || upstream.status >= 400 || !location) break;
+            if (hop >= MAX_REDIRECTS) return fail(502, 'Too many redirects.');
+            current = new URL(location, current);
+            const hopReason = rejectReason(current);
+            if (hopReason) return fail(400, hopReason);
+        }
     } catch {
         return fail(502, 'Could not fetch the image.');
     }
@@ -92,8 +105,32 @@ export async function GET(request: Request) {
     const declared = parseInt(upstream.headers.get('content-length') ?? '', 10);
     if (declared > MAX_BYTES) return fail(413, 'Image too large.');
 
-    const bytes = await upstream.arrayBuffer();
-    if (bytes.byteLength > MAX_BYTES) return fail(413, 'Image too large.');
+    // The cap is enforced as bytes arrive, so an upstream that lied about (or
+    // omitted) its length is cut off rather than buffered whole first.
+    const reader = upstream.body?.getReader();
+    if (!reader) return fail(502, 'Upstream returned no body.');
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            total += value.byteLength;
+            if (total > MAX_BYTES) {
+                await reader.cancel();
+                return fail(413, 'Image too large.');
+            }
+            chunks.push(value);
+        }
+    } catch {
+        return fail(502, 'Could not fetch the image.');
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
 
     // Rebuilt from scratch rather than passing the upstream response through, so
     // no upstream header reaches the browser. `private` keeps shared caches out
@@ -101,7 +138,7 @@ export async function GET(request: Request) {
     return new Response(bytes, {
         headers: {
             'Content-Type': contentType,
-            'Content-Length': String(bytes.byteLength),
+            'Content-Length': String(total),
             'Content-Disposition': 'inline',
             'X-Content-Type-Options': 'nosniff',
             'Content-Security-Policy': "default-src 'none'; sandbox",

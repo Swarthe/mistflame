@@ -1,4 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { isValidEmail } from '@/app/api/contacts/route';
 
 export async function PATCH(
     request: Request,
@@ -12,7 +13,9 @@ export async function PATCH(
     }
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    const subject = body?.subject ?? null;
+    // Anything other than a string (a JSON number, say) would otherwise be
+    // bound into the row as-is.
+    const subject = typeof body?.subject === 'string' ? body.subject : null;
     const emailBody = body?.body;
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
     const sender = typeof body?.sender === 'string' ? body.sender : null;
@@ -23,11 +26,16 @@ export async function PATCH(
     if (emailBody.length > 100_000) {
         return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
     }
-    if (typeof subject === 'string' && subject.length > 500) {
+    if (subject !== null && subject.length > 500) {
         return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
     }
     if (!sender) {
         return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
+    }
+    // Same reasoning as the POST handler: an invalid CC address would only
+    // fail at send time, after the contact's copy has been delivered.
+    if (cc && cc.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a))) {
+        return Response.json({ ok: false, error: 'Invalid CC address.' }, { status: 400 });
     }
 
     const { env } = await getCloudflareContext({ async: true });
@@ -88,15 +96,12 @@ export async function DELETE(
 
     await Promise.all(attachments.map(att => env.ATTACHMENTS.delete(att.r2_key)));
 
-    await env.DB
-        .prepare(`DELETE FROM attachment WHERE email_id IN (${ids.map(() => '?').join(',')})`)
-        .bind(...ids)
-        .run();
-
-    await env.DB
-        .prepare(`DELETE FROM email WHERE id IN (${ids.map(() => '?').join(',')})`)
-        .bind(...ids)
-        .run();
+    // One transaction, so a failure between the two cannot leave attachment
+    // rows pointing at deleted emails. The R2 deletes stay best-effort.
+    await env.DB.batch([
+        env.DB.prepare(`DELETE FROM attachment WHERE email_id IN (${ids.map(() => '?').join(',')})`).bind(...ids),
+        env.DB.prepare(`DELETE FROM email WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids),
+    ]);
 
     return Response.json({ ok: true, deleted: ids.length });
 }

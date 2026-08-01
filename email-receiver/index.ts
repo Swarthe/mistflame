@@ -1,5 +1,6 @@
 import PostalMime from 'postal-mime';
 import { htmlToText, htmlToFragment } from '../src/lib/html-to-text.mjs';
+import { encodeHeaderText } from '../src/lib/mime';
 
 // Oversized HTML is dropped rather than truncated: a half-written fragment would
 // render as broken markup. The plain-text body is still stored.
@@ -113,11 +114,14 @@ export default {
         // 2. Subject fallback for contacts replying without In-Reply-To or with no match.
         // Match against both the bare normalised subject and the "Re: <normalised>" form,
         // since outbound reply subjects are stored with the "Re: " prefix already applied.
+        // Only sent rows qualify: a contact cannot be replying to a message that has not
+        // gone out, so an unsent draft that happens to share the subject must not become
+        // the parent.
         if (parentId === null && subject) {
             const normalised = subject.replace(/^(Re:\s*|Fwd?:\s*)+/gi, '').trim();
             if (normalised) {
                 const parent = await env.DB
-                    .prepare("SELECT id FROM email WHERE contact_id = ? AND sender IS NOT NULL AND (subject = ? OR subject = 'Re: ' || ?) ORDER BY id DESC LIMIT 1")
+                    .prepare("SELECT id FROM email WHERE contact_id = ? AND sender IS NOT NULL AND sent_at IS NOT NULL AND (subject = ? OR subject = 'Re: ' || ?) ORDER BY id DESC LIMIT 1")
                     .bind(contact.id, normalised, normalised)
                     .first<{ id: number }>();
                 if (parent) parentId = parent.id;
@@ -172,9 +176,12 @@ export default {
                 `From: <${recipient}>`,
                 `To: <${addr}>`,
                 `Message-ID: <${generateMessageId(notifyDomain)}>`,
-                `Subject: ${notifySubject}`,
+                // The contact's name is routinely non-ASCII, and the preview
+                // below is raw 8-bit text, so both need declaring.
+                `Subject: ${encodeHeaderText(notifySubject)}`,
                 'MIME-Version: 1.0',
                 'Content-Type: text/plain; charset=UTF-8',
+                'Content-Transfer-Encoding: 8bit',
                 '',
                 `From:    ${displayFrom}`,
                 `To:      ${recipient}`,

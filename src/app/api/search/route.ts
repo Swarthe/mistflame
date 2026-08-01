@@ -76,7 +76,7 @@ export async function GET(request: Request) {
             .prepare(`
                 SELECT e.id, e.contact_id, e.sender, e.sent_at, e.subject,
                        c.name AS contact_name, c.email AS contact_email,
-                       snippet(email_fts, 1, ?, ?, '…', 12) AS snippet
+                       snippet(email_fts, -1, ?, ?, '…', 12) AS snippet
                 FROM email_fts
                 JOIN email e ON e.id = email_fts.rowid
                 JOIN contact c ON c.id = e.contact_id
