@@ -54,6 +54,18 @@ interface EmailRecord {
     attachments: Attachment[];
 }
 
+interface SearchResult {
+    id: number;
+    contact_id: number;
+    contact_name: string;
+    contact_email: string;
+    sender: string | null;
+    sent_at: string | null;
+    subject: string | null;
+    /** Body extract with matched terms wrapped in HIT_OPEN/HIT_CLOSE. */
+    snippet: string;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const inputCls = 'w-full bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 placeholder:text-white/40 font-sans';
@@ -66,6 +78,32 @@ const validateCc = (cc: string): string | null => {
 const btnPrimary = 'text-sm font-bold px-4 py-2 bg-white/80 text-black hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer font-sans';
 const btnGhost = 'text-sm px-4 py-2 border border-white/20 text-white/75 hover:text-white hover:border-white/40 transition-colors cursor-pointer font-sans';
 const btnDanger = 'text-xs leading-none text-red-400/60 hover:text-red-400 transition-colors cursor-pointer';
+
+// Must match HIT_OPEN/HIT_CLOSE in api/search/route.ts. Duplicated for the same
+// reason as isValidEmail: importing a route module into the client bundle to
+// share two characters is the worse trade.
+const HIT_OPEN = '\u0002';
+const HIT_CLOSE = '\u0003';
+
+/**
+ * Render a snippet's matched runs as <mark>. The delimiters are control
+ * characters that cannot occur in a body, so a plain split is unambiguous, and
+ * every piece stays text: no markup from an email is ever injected here.
+ */
+function SnippetText({ snippet }: { snippet: string }) {
+    const pieces = snippet.split(HIT_OPEN).flatMap((chunk, i) => {
+        if (i === 0) return [{ hit: false, text: chunk }];
+        const [hit, ...rest] = chunk.split(HIT_CLOSE);
+        return [{ hit: true, text: hit }, { hit: false, text: rest.join(HIT_CLOSE) }];
+    });
+    return (
+        <>
+            {pieces.map((piece, i) => piece.hit
+                ? <mark key={i} className="bg-[#ffd54f]/25 text-[#ffd54f] rounded-[1px]">{piece.text}</mark>
+                : <span key={i}>{piece.text}</span>)}
+        </>
+    );
+}
 
 function hexToRgba(hex: string, alpha: number): string {
     const h = hex.replace('#', '');
@@ -416,7 +454,7 @@ function AttachmentChip({ att, href, onDelete }: {
     );
 }
 
-function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, threadSender, senderEditable, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
+function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, threadSender, senderEditable, highlighted, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
     email: EmailRecord;
     contactName: string;
     parentEmail?: EmailRecord | null;
@@ -424,6 +462,8 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
     sendAddrs: string[];
     threadSender: string | null;
     senderEditable: boolean;
+    /** Outlined because a search result pointed here. */
+    highlighted: boolean;
     onReply: () => void;
     onDelete: () => void;
     onEdit: (sender: string | null, subject: string, body: string, cc: string) => Promise<void>;
@@ -498,11 +538,12 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
     };
 
     const displayIsUs = isUs;
-    const cardCls = `flex flex-col gap-2 p-4 border ${displayIsUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}`;
+    // The outline marks the card a search result jumped to, and fades on its own.
+    const cardCls = `flex flex-col gap-2 p-4 border transition-shadow ${displayIsUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}${highlighted ? ' shadow-[0_0_0_2px_#ffd54f]' : ''}`;
 
     if (editing) {
         return (
-            <div className={`${cardCls} gap-3`}>
+            <div id={`email-${email.id}`} className={`${cardCls} gap-3`}>
                 <div className="flex flex-col gap-1">
                     <div className="flex gap-2 items-center">
                         {senderLocked ? (
@@ -583,7 +624,7 @@ function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, thread
     );
 
     return (
-        <div className={cardCls}>
+        <div id={`email-${email.id}`} className={cardCls}>
             {parentEmail && <ReplyPreview email={parentEmail} contactName={contactName} orgName={orgName} />}
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-baseline gap-2 min-w-0">
@@ -755,6 +796,12 @@ function NewEmailCard({ replyTo, contactName, orgName, sendAddrs, threadSender, 
 
 const POLL_INTERVAL_MS = 5_000;
 
+// Long enough that typing a word is one query rather than five, short enough
+// that the results feel attached to the keystrokes.
+const SEARCH_DEBOUNCE_MS = 250;
+const MIN_SEARCH_CHARS = 2;
+const HIGHLIGHT_MS = 2_500;
+
 // A refetch is forced this often regardless of the revision, so a write path
 // that ever lands without a trigger behind it degrades to a slow refresh rather
 // than a stuck view.
@@ -785,6 +832,14 @@ export default function OutreachPage() {
     const [contactSaveError, setContactSaveError] = useState<string | null>(null);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterAwaiting, setFilterAwaiting] = useState(false);
+    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+    const [searchTruncated, setSearchTruncated] = useState(false);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [searchUnavailable, setSearchUnavailable] = useState(false);
+    // Set when a result is clicked for a contact whose emails are not loaded
+    // yet; the scroll happens once they arrive.
+    const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
+    const [highlightId, setHighlightId] = useState<number | null>(null);
 
     const [addingEmail, setAddingEmail] = useState(false);
     const [replyToEmail, setReplyToEmail] = useState<EmailRecord | null>(null);
@@ -805,6 +860,7 @@ export default function OutreachPage() {
     const orgName = config?.orgName || 'Mistflame';
     const sendAddrs = config?.sendAddrs ?? [];
     const searchTrimmed = searchQuery.trim();
+    const searchActive = searchTrimmed.length >= MIN_SEARCH_CHARS;
     const filteredContacts = contacts.filter(c => {
         if (filterAwaiting && !c.awaiting_reply) return false;
         if (!searchTrimmed) return true;
@@ -921,15 +977,78 @@ export default function OutreachPage() {
         else localStorage.setItem('mf_contact', String(selectedId));
     }, [selectedId]);
 
-    const selectContact = (id: number) => {
+    const clearSearchResults = () => {
+        setSearchResults([]);
+        setSearchTruncated(false);
+        setSearchUnavailable(false);
+        setSearchLoading(false);
+    };
+
+    const scrollToEmail = (id: number) => {
+        const el = document.getElementById(`email-${id}`);
+        if (!el) return false;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setHighlightId(id);
+        return true;
+    };
+
+    // Message search. Contacts are filtered client-side from data already held;
+    // only this half needs the server, so a short query does nothing and the
+    // rest is debounced. Clearing on a too-short query happens in the input's
+    // onChange, so that this effect never sets state synchronously.
+    useEffect(() => {
+        if (searchTrimmed.length < MIN_SEARCH_CHARS) return;
+        let cancelled = false;
+        const timer = setTimeout(() => {
+            setSearchLoading(true);
+            apiFetch(`/api/search?q=${encodeURIComponent(searchTrimmed)}`)
+                .then(async res => {
+                    if (cancelled) return;
+                    if (res.status === 503) {
+                        setSearchUnavailable(true);
+                        setSearchResults([]);
+                        return;
+                    }
+                    const data = await res.json() as { results?: SearchResult[]; truncated?: boolean };
+                    setSearchUnavailable(false);
+                    setSearchResults(data.results ?? []);
+                    setSearchTruncated(!!data.truncated);
+                })
+                .catch(() => { if (!cancelled) setSearchResults([]); })
+                .finally(() => { if (!cancelled) setSearchLoading(false); });
+        }, SEARCH_DEBOUNCE_MS);
+        return () => { cancelled = true; clearTimeout(timer); };
+    }, [searchTrimmed]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // A result for another contact switches to it first; the card only exists
+    // once that contact's emails have loaded. rAF because the scroll wants the
+    // committed layout, not the state that produced it.
+    useEffect(() => {
+        if (pendingScrollId === null) return;
+        if (!emails.some(e => e.id === pendingScrollId)) return;
+        const frame = requestAnimationFrame(() => {
+            scrollToEmail(pendingScrollId);
+            setPendingScrollId(null);
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [emails, pendingScrollId]);
+
+    useEffect(() => {
+        if (highlightId === null) return;
+        const timer = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
+        return () => clearTimeout(timer);
+    }, [highlightId]);
+
+    /** Returns false when a discard prompt was declined and nothing changed. */
+    const selectContact = (id: number): boolean => {
         if (addingContact && (addContactForm.name || addContactForm.email || addContactForm.description)) {
-            if (!confirm('Discard new contact?')) return;
+            if (!confirm('Discard new contact?')) return false;
         } else if (editContact) {
-            if (!confirm('Discard unsaved changes?')) return;
+            if (!confirm('Discard unsaved changes?')) return false;
         } else if (addingEmail || replyToEmail) {
-            if (!confirm('Discard unsaved email?')) return;
+            if (!confirm('Discard unsaved email?')) return false;
         } else if (editingEmailId !== null) {
-            if (!confirm('Discard unsaved email edits?')) return;
+            if (!confirm('Discard unsaved email edits?')) return false;
         }
         setSelectedId(id);
         setAddingContact(false);
@@ -940,6 +1059,18 @@ export default function OutreachPage() {
         setReplyToEmail(null);
         setEditingEmailId(null);
         setApiError(null);
+        return true;
+    };
+
+    const openSearchResult = (result: SearchResult) => {
+        if (result.contact_id === selectedId) {
+            scrollToEmail(result.id);
+            return;
+        }
+        if (!selectContact(result.contact_id)) return;
+        // The contact's emails are fetched by the selectedId effect; the scroll
+        // waits for them to arrive.
+        setPendingScrollId(result.id);
     };
 
     const logout = async () => {
@@ -1276,13 +1407,16 @@ export default function OutreachPage() {
                         </svg>
                         <input
                             className="flex-1 bg-transparent text-white text-xs font-sans focus:outline-none placeholder:text-white/30"
-                            placeholder="Search contacts…"
+                            placeholder="Search contacts and mail…"
                             value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value)}
+                            onChange={e => {
+                                setSearchQuery(e.target.value);
+                                if (e.target.value.trim().length < MIN_SEARCH_CHARS) clearSearchResults();
+                            }}
                         />
                         {searchQuery && (
                             <button
-                                onClick={() => setSearchQuery('')}
+                                onClick={() => { setSearchQuery(''); clearSearchResults(); }}
                                 className="text-white/35 hover:text-white/70 transition-colors cursor-pointer font-sans text-xs"
                             >
                                 ✕
@@ -1309,8 +1443,16 @@ export default function OutreachPage() {
                         {!loadingContacts && !contactsError && contacts.length === 0 && (
                             <p className="text-sm text-white/55 text-center py-8 font-sans">No contacts yet</p>
                         )}
-                        {!loadingContacts && contacts.length > 0 && filteredContacts.length === 0 && (
+                        {!loadingContacts && contacts.length > 0 && filteredContacts.length === 0 && !searchActive && (
                             <p className="text-sm text-white/55 text-center py-8 font-sans">No matches</p>
+                        )}
+                        {searchActive && !loadingContacts && contacts.length > 0 && (
+                            <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-white/40 font-sans border-b border-white/10">
+                                Contacts {filteredContacts.length > 0 && `· ${filteredContacts.length}`}
+                            </div>
+                        )}
+                        {searchActive && filteredContacts.length === 0 && (
+                            <p className="text-xs text-white/40 px-4 py-3 font-sans">No matching contacts</p>
                         )}
                         {filteredContacts.map(c => (
                             <button
@@ -1330,6 +1472,52 @@ export default function OutreachPage() {
                                 )}
                             </button>
                         ))}
+
+                        {searchActive && (
+                            <>
+                                <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-white/40 font-sans border-y border-white/10 flex items-center gap-1.5">
+                                    <span>Messages</span>
+                                    {searchResults.length > 0 && (
+                                        <span>· {searchResults.length}{searchTruncated ? '+' : ''}</span>
+                                    )}
+                                    {searchLoading && <span className="text-white/25 normal-case tracking-normal">searching…</span>}
+                                </div>
+                                {searchUnavailable && (
+                                    <p className="text-xs text-white/40 px-4 py-3 font-sans">
+                                        Search index not installed. Apply
+                                        {' '}<span className="text-white/55">db/migrations/004-email-fts.sql</span>.
+                                    </p>
+                                )}
+                                {!searchUnavailable && !searchLoading && searchResults.length === 0 && (
+                                    <p className="text-xs text-white/40 px-4 py-3 font-sans">No matching messages</p>
+                                )}
+                                {searchResults.map(r => (
+                                    <button
+                                        key={r.id}
+                                        onClick={() => openSearchResult(r)}
+                                        className="w-full text-left px-4 py-3 border-b border-white/10 transition-colors hover:bg-white/[0.07] cursor-pointer"
+                                    >
+                                        <div className="flex items-baseline justify-between gap-2">
+                                            <span className="text-xs text-white/70 truncate font-sans">{r.contact_name}</span>
+                                            <span className="text-[10px] text-white/35 font-sans shrink-0">
+                                                {r.sent_at ? formatDate(r.sent_at).split(',')[0] : 'draft'}
+                                            </span>
+                                        </div>
+                                        <div className="text-xs text-white/90 truncate mt-0.5 font-sans">
+                                            {r.subject || '(no subject)'}
+                                        </div>
+                                        <div className="text-[11px] text-white/45 mt-1 font-sans line-clamp-2 whitespace-pre-wrap break-words">
+                                            <SnippetText snippet={r.snippet} />
+                                        </div>
+                                    </button>
+                                ))}
+                                {searchTruncated && (
+                                    <p className="text-[11px] text-white/35 px-4 py-2 font-sans">
+                                        Showing the first {searchResults.length}; narrow the search for more.
+                                    </p>
+                                )}
+                            </>
+                        )}
                     </div>
                 </aside>
 
@@ -1443,6 +1631,7 @@ export default function OutreachPage() {
                                                         sendAddrs={sendAddrs}
                                                         threadSender={threadSender}
                                                         senderEditable={email.sender !== null && outgoingInThread.length === 1 && !replyIds.has(email.id)}
+                                                        highlighted={highlightId === email.id}
                                                         onReply={() => startReply(email)}
                                                         onDelete={() => deleteEmail(email.id)}
                                                         onEdit={(sender, subject, body, cc) => editEmail(email.id, sender, subject, body, cc)}

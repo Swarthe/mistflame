@@ -121,3 +121,40 @@ CREATE TRIGGER trg_attachment_insert_revision AFTER INSERT ON attachment
 BEGIN UPDATE meta SET value = value + 1 WHERE key = 'revision'; END;
 CREATE TRIGGER trg_attachment_delete_revision AFTER DELETE ON attachment
 BEGIN UPDATE meta SET value = value + 1 WHERE key = 'revision'; END;
+
+-- Full-text search. External content: the index points at email rather than
+-- duplicating the bodies, which for HTML mail are the largest thing here.
+-- NOTE: `wrangler d1 export` refuses a database containing a virtual table.
+-- Drop email_fts, export, then reapply db/migrations/004-email-fts.sql; the
+-- index stores no original text of its own, so nothing is lost.
+CREATE VIRTUAL TABLE email_fts USING fts5(
+    subject,
+    body,
+    content='email',
+    content_rowid='id',
+    tokenize="unicode61 remove_diacritics 2"
+);
+
+-- An external-content index goes stale if a write reaches email without these
+-- firing, and a stale index returns wrong rows rather than an error. The
+-- 'delete' command has to be given the values as they were indexed, hence
+-- old.*, and hence the update trigger deleting before it reinserts.
+CREATE TRIGGER trg_email_fts_insert AFTER INSERT ON email
+BEGIN
+    INSERT INTO email_fts (rowid, subject, body)
+        VALUES (new.id, new.subject, new.body);
+END;
+
+CREATE TRIGGER trg_email_fts_delete AFTER DELETE ON email
+BEGIN
+    INSERT INTO email_fts (email_fts, rowid, subject, body)
+        VALUES ('delete', old.id, old.subject, old.body);
+END;
+
+CREATE TRIGGER trg_email_fts_update AFTER UPDATE ON email
+BEGIN
+    INSERT INTO email_fts (email_fts, rowid, subject, body)
+        VALUES ('delete', old.id, old.subject, old.body);
+    INSERT INTO email_fts (rowid, subject, body)
+        VALUES (new.id, new.subject, new.body);
+END;

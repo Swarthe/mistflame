@@ -21,6 +21,12 @@ Email Workers (send and receive).
 - Add, edit and delete contacts, with freeform colour-coded tags
 - Fuzzy search and an awaiting-reply filter in the sidebar
 
+**Search**
+- One box searches contacts and message text at once: contacts by fuzzy match,
+  subjects, tags and bodies by full text
+- Results show a highlighted extract; clicking one jumps to that message in its
+  thread
+
 **Email history**
 - Complete history per contact, grouped into threads
 - HTML messages are rendered; quoted history collapses behind a toggle
@@ -183,6 +189,46 @@ npx wrangler deploy --config email-receiver/wrangler.toml
 Redeploy this worker whenever `email-receiver/index.ts` changes (`npm run
 deploy` only redeploys the main worker).
 
+### 4. Apply any pending migrations
+
+`db/schema.sql` always describes the current shape of the database, so an
+install created from it already has every migration applied. `db/migrations/`
+holds the numbered files that bring an *existing* database up to that shape, and
+the two are always updated together.
+
+**1. Back up.** `wrangler d1 export` refuses a database containing a virtual
+table, and the search index is one, so drop it before exporting and reapply the
+migration afterwards. The index holds no text of its own, so nothing is lost:
+
+```bash
+npx wrangler d1 execute mistflame-db --remote --command "DROP TABLE email_fts"
+npx wrangler d1 export mistflame-db --remote --output backup.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/004-email-fts.sql
+```
+
+**2. Apply the migrations,** in order:
+
+```bash
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/001-html-email.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/002-indexes.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/003-revision.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/004-email-fts.sql
+```
+
+002 to 004 use `IF NOT EXISTS` throughout and are safe to reapply, so an already
+current database is left alone. 001 is not: SQLite has no
+`ADD COLUMN IF NOT EXISTS`, so it errors rather than doing nothing. Check
+whether it is needed with
+`npx wrangler d1 execute mistflame-db --remote --command "PRAGMA table_info(email)"`.
+
+Swap `--remote` for `--local` and the database name for the binding name `DB` to
+apply the same files to a development database. A one-off change can go through
+`--command` rather than a file:
+
+```bash
+npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD COLUMN notes TEXT"
+```
+
 ## Security
 
 - **Authentication**: a single password, compared in constant time so a wrong
@@ -252,38 +298,6 @@ must be run from the project root. Local state is stored in
 `.wrangler/state/v3/d1/` (gitignored); delete that directory to fully reset the
 database.
 
-A database created before a schema change needs the matching migration from
-`db/migrations/` rather than a fresh `schema.sql` run:
-
-```bash
-npx wrangler d1 execute DB --local --file db/migrations/001-html-email.sql
-npx wrangler d1 execute DB --local --file db/migrations/002-indexes.sql
-npx wrangler d1 execute DB --local --file db/migrations/003-revision.sql
-```
-
-`db/schema.sql` always describes the current shape, so a database created from
-it already has every migration applied. SQLite has no
-`ADD COLUMN IF NOT EXISTS`, so 001 errors if reapplied; check first with
-`npx wrangler d1 execute DB --local --command "PRAGMA table_info(email)"`. 002
-and 003 use `IF NOT EXISTS` throughout and are safe to rerun.
-
-## Polling
-
-The client checks for new mail every five seconds. Rather than refetching the
-contact list, the open thread and the pending-send count each time, it reads a
-single counter from `GET /api/revision` and only refetches when that number has
-moved.
-
-The counter lives in the `meta` table and is maintained by SQLite triggers on
-`contact`, `tag`, `contact_tag`, `email` and `attachment`. Triggers rather than
-explicit bumps in the route handlers, because the email receiver is a separate
-worker that writes to D1 directly and never goes through the API.
-
-An idle tab therefore costs one indexed row read per poll. As a safety net, a
-full refetch happens once a minute regardless, so a write path that ever lands
-without a trigger behind it degrades to a slow refresh rather than a stuck view.
-Polling pauses entirely while the tab is hidden.
-
 ## Limitations and missing features
 
 Contributions and feature requests are welcome. The following features are not
@@ -297,7 +311,9 @@ currently implemented.
   A full mail client re-attaches those parts; this one does not
 - **Remote images in CSS**: `url(...)` backgrounds in inline styles stay blocked
   even after "Load images"; only `<img>` elements are proxied
-- **Full email search**: no full-text search across email bodies or subjects
+- **Search scope**: full-text search covers subjects and message text, but not
+  attachment contents or contact descriptions, and there are no field filters
+  such as `from:` or date ranges
 - **Contact import/export**: no CSV or vCard import/export
 - **Pagination**: long contact lists and email histories are loaded in full
 - **Email templates / LLM integration**: no reusable draft templates or LLM
@@ -306,8 +322,8 @@ currently implemented.
 - **Multi-user access**: single-user only by design; no role-based access or
   shared sessions
 - **Push updates**: new mail appears through polling rather than a push, so it
-  can take up to five seconds to show. The poll itself is a single-row read
-  (see "Polling" below), but there is no WebSocket or SSE channel
+  can take up to five seconds to show. The poll itself is cheap (see Notes), but
+  there is no WebSocket or SSE channel
 
 ## Notes
 
@@ -315,17 +331,17 @@ currently implemented.
   harmless, `@opennextjs/cloudflare` 1.x requires this convention
 - D1 FK constraints are declared in the schema but not enforced at runtime;
   cascading deletes are handled manually in route handlers
-- To apply incremental schema changes to an existing deployment, use `--file`
-  for SQL files, or `--command "ALTER TABLE ..."` for single statements:
-  ```bash
-  npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD COLUMN notes TEXT"
-  ```
-- Numbered migrations live in `db/migrations/` and are applied in order to
-  existing deployments; `db/schema.sql` is kept in step for fresh installs.
-  Take a backup first:
-  ```bash
-  npx wrangler d1 export mistflame-db --remote --output backup.sql
-  ```
+- The client checks for new mail every five seconds, but rather than refetching
+  the contact list, the open thread and the pending-send count each time, it
+  reads a single counter from `GET /api/revision` and only refetches when that
+  number has moved. The counter lives in the `meta` table, maintained by SQLite
+  triggers on every user-visible table; triggers rather than bumps in the route
+  handlers, because the email receiver is a separate worker that writes to D1
+  directly and never goes through the API. An idle tab therefore costs one
+  indexed row read per poll, and polling pauses while the tab is hidden. A full
+  refetch happens once a minute regardless, so a write path that ever lands
+  without a trigger behind it degrades to a slow refresh rather than a stuck
+  view
 - Emails received before HTML rendering existed have raw markup stored in their
   body column. `scripts/backfill-html-bodies.mjs` converts those rows into a
   readable text body plus the HTML fragment; it reads a D1 dump and writes SQL
