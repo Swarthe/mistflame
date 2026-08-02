@@ -9,7 +9,7 @@
 
 ## Checks
 - Typecheck: `npx tsc --noEmit`
-- Lint: `npx eslint src`. `page.tsx` has three pre-existing errors; do not treat a clean run as the baseline. Two are `react-hooks/set-state-in-effect` in the mount and contact-selection effects, the third is `react-hooks/immutability` for the poll effect calling `refreshContacts` above its declaration. Run it against `src`: a bare `npx eslint` also walks `.next/` and `.open-next/` and reports thousands of problems from build output.
+- Lint: `npx eslint src`. `page.tsx` has two pre-existing `react-hooks/set-state-in-effect` errors (the mount and contact-selection effects); do not treat a clean run as the baseline. Run it against `src`: a bare `npx eslint` also walks `.next/` and `.open-next/` and reports thousands of problems from build output.
 - No test suite. Verify changes manually via `npm run preview`.
 - `wrangler.toml` and `email-receiver/wrangler.toml` are gitignored. Copy from the `.example` files before running preview:
   ```
@@ -89,14 +89,14 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 - **`email_fts` is an external-content table** (`content='email'`, `content_rowid='id'`), so it stores no text of its own and is rebuilt from `email` with `INSERT INTO email_fts(email_fts) VALUES('rebuild')`. Three triggers keep it in step. An external-content index that misses a write does not error, it returns wrong rows, so the `'delete'` command must be passed `old.*` exactly as indexed; that is why the update trigger deletes before it reinserts. Verify with `INSERT INTO email_fts(email_fts) VALUES('integrity-check')`.
 - **`wrangler d1 export` refuses a database containing a virtual table.** To back up: `DROP TABLE email_fts`, export, then reapply `004-email-fts.sql`. Nothing is lost, since the index is derived. This is the one real cost of FTS5 here and it is why the drop/recreate is documented in the migration itself.
 - **Raw input is never passed to `MATCH`.** `AND`, `*`, `^`, `:`, `-` and an unpaired `"` are all operators, so `re: hello` would be a syntax error. `toMatchExpression` quotes every term, which makes it a literal phrase while still letting the tokeniser split inside it, so `sam@example.com` matches as sam + example + com. The last term gets `*` for prefix matching as the user types. Terms with no letter or digit are dropped, because a phrase that tokenises to nothing is rejected by FTS5.
-- **Snippets are marked with `U+0002`/`U+0003`**, not HTML. `HIT_OPEN`/`HIT_CLOSE` are defined in both `api/search/route.ts` and `page.tsx` (same rationale as `isValidEmail`). `SnippetText` splits on them and renders each run as text, so an email body cannot inject markup into the sidebar.
+- **Snippets are marked with `U+0002`/`U+0003`**, not HTML. `HIT_OPEN`/`HIT_CLOSE` are defined in both `api/search/route.ts` and `src/components/SnippetText.tsx` (same rationale as `isValidEmail`). `SnippetText` splits on them and renders each run as text, so an email body cannot inject markup into the sidebar.
 - Ranking is `bm25(email_fts, 2.0, 1.0)`, subject weighted double. `MAX_RESULTS` is 50; the query asks for 51 so `truncated` can distinguish "exactly 50" from "more".
 - A missing index returns **503 with `unavailable: true`** rather than a 500, and the sidebar says which migration to apply. Same reasoning as `/api/revision` returning null: the index ships as a migration separate from the code that queries it, so a deployment can legitimately be without it.
 - Clicking a result selects the contact and scrolls to `#email-{id}`, outlining it for `HIGHLIGHT_MS`. When the contact is not the current one, `pendingScrollId` holds the target until that contact's emails arrive.
 
 ## Tags
 - Tags are case-insensitively normalised on both sides:
-  - **Client** (`ContactForm` in `page.tsx`): `addTag` resolves `matchedTag` via `allTags.find(t => t.name.toLowerCase() === input.toLowerCase())` and uses `matchedTag.name` (the stored casing) rather than the typed string.
+  - **Client** (`src/components/ContactForm.tsx`): `addTag` resolves `matchedTag` via `allTags.find(t => t.name.toLowerCase() === input.toLowerCase())` and uses `matchedTag.name` (the stored casing) rather than the typed string.
   - **Server** (`upsertTags` in `contacts/route.ts`): does a `SELECT ... WHERE LOWER(name) = LOWER(?)` lookup before inserting, so the existing row is always reused if a case variant is present.
 - The tag `name` UNIQUE constraint in SQLite is case-sensitive by default; the application layer is responsible for deduplication.
 
@@ -104,7 +104,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 - Manually added emails and replies are always outgoing (mistflame sender). There is no option to add a contact-type (inbound) email manually.
 - The `+ Reply` button is only shown on inbound emails (`sender IS NULL`). Replies are always sent as mistflame.
 - When replying, the sender address is locked to the address that originally received the inbound email.
-- Reply drafts are composed without quoted text in the body. At send time, `send-emails/route.ts` appends the quoted parent body to both the outgoing email and the stored DB body. The thread view collapses quoted sections behind a `···` toggle button (`splitQuote` in `page.tsx` detects the `\n\nOn ... wrote:` boundary); inbound emails from contacts are handled the same way if their client includes quoted text.
+- Reply drafts are composed without quoted text in the body. At send time, `send-emails/route.ts` appends the quoted parent body to both the outgoing email and the stored DB body. The thread view collapses quoted sections behind a `···` toggle button (`splitQuote` in `src/lib/format.ts` detects the `\n\nOn ... wrote:` boundary); inbound emails from contacts are handled the same way if their client includes quoted text.
 - CC addresses are stored as a comma-separated string. At send time, the raw email is delivered separately to each CC address rather than relying on the `Cc:` SMTP header alone (see "CC delivery" below).
 - The POST and PATCH endpoints for emails reject `sender: null`; null senders are only written by the email receiver worker directly via D1, not via the API.
 - **Replying to an HTML email preserves the HTML quote chain.** The composed reply is always plain text (the composer is a textarea), but when the parent has a `body_html`, `send-emails/route.ts` also builds an HTML rendition: our words escaped with `<br>` line breaks, the attribution line, then the parent's own markup nested in a `<blockquote>`. The message goes out as `multipart/alternative`, nested inside `multipart/mixed` when there are attachments. A thread that started as plain text stays plain text throughout.
@@ -121,7 +121,7 @@ The `email` table uses two columns to encode email state; get these wrong and ev
 | address string | `NULL` | Outgoing draft, not yet sent |
 | address string | timestamp | Outgoing sent |
 
-**`body` and `body_html`.** `body` is the canonical plain-text rendition and is **always** populated; `body_html` is an optional HTML alternative, `NULL` when the email has none. Everything that consumes text reads `body`: `ReplyPreview` and the `···` toggle in `page.tsx`, the receiver's subject-match fallback and notification previews, and the outgoing `text/plain` part. When an inbound email has no `text/plain` part, the receiver derives the text from the HTML with `htmlToText` rather than storing markup in `body`; that is what made old rows render as raw HTML before this split existed (see `scripts/backfill-html-bodies.mjs`).
+**`body` and `body_html`.** `body` is the canonical plain-text rendition and is **always** populated; `body_html` is an optional HTML alternative, `NULL` when the email has none. Everything that consumes text reads `body`: `ReplyPreview` and the `···` toggle in the email cards, the receiver's subject-match fallback and notification previews, and the outgoing `text/plain` part. When an inbound email has no `text/plain` part, the receiver derives the text from the HTML with `htmlToText` rather than storing markup in `body`; that is what made old rows render as raw HTML before this split existed (see `scripts/backfill-html-bodies.mjs`).
 
 `body_html` holds a **body fragment**, not a document: the receiver runs `htmlToFragment` to drop the doctype, `<html>`/`<head>` wrapper, comments and `<script>`, so both the renderer and the outbound-quote path get something nestable. `<style>` blocks are hoisted inline and kept in storage even though both consumers currently strip them, so a future CSS-scoping renderer will not need a second migration.
 
@@ -155,7 +155,7 @@ The script is idempotent — it checks for each change before applying. If any p
 
 Inbound HTML is sanitised, then rendered in a **sandboxed iframe** per message, not injected into the page. That isolation is what allows `<style>` blocks to be kept: they can only affect the message's own document. Native clients all render messages in an isolated document; among webmail, Gmail and Outlook web inject inline and maintain a CSS rewriter to scope selectors (you can see it in Gmail's DOM as `m_<messageid>_` class prefixes), while smaller clients such as Roundcube use a frame. A frame is the right trade for a codebase this size: the alternative means owning a selector rewriter whose failure mode is a sender's CSS escaping into the app.
 
-**Frame (`EmailFrame` in `page.tsx`, document assembled by `buildEmailDocument`).**
+**Frame (`src/components/EmailFrame.tsx`, document assembled by `buildEmailDocument`).**
 - `sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"`. No `allow-scripts`, so nothing in the message can execute, which is what makes `allow-same-origin` safe: it exists only so the parent can read the document to size the frame. `allow-popups` is required or link clicks do nothing, and `allow-popups-to-escape-sandbox` stops the opened page inheriting the sandbox.
 - A `srcdoc` frame **inherits the parent's CSP**, so `img-src 'self' data:` keeps blocking remote images inside it and the whole image-proxy design carries over unchanged.
 - Height is measured from `body.scrollHeight` (not `documentElement`, which would feed back into the height we set) and tracked with a `ResizeObserver`, because images arrive after load and expanding the quote reflows. Clamped between `MIN_FRAME_HEIGHT` and `MAX_FRAME_HEIGHT`; the floor keeps an email that hides its own content from collapsing to nothing, the ceiling bounds a runaway layout.
@@ -168,7 +168,7 @@ Inbound HTML is sanitised, then rendered in a **sandboxed iframe** per message, 
 - The input is wrapped in a `<div>` before sanitising. This is load-bearing: the HTML parser hoists a *leading* `<style>` into `<head>`, and DOMPurify returns body content only, so an email whose fragment starts with a style block (exactly where `htmlToFragment` puts the ones it lifts out of the head) would silently lose it.
 - `@import` is stripped from surviving `<style>` elements. The inherited CSP would refuse the fetch anyway; this stops it being attempted.
 - Quote splitting looks for the first `.gmail_quote_container`, `.gmail_quote`, `.moz-cite-prefix`, `#divRplyFwdMsg`, `#appendonsend`, `div.OutlookMessageHeader`, `hr#stopSpelling` or `blockquote`, descending through single-wrapper divs, then takes that node and its following siblings. This feeds the same `···` toggle the plain-text path uses.
-- DOMPurify is loaded with a dynamic `import()` shared across cards (`loadPurifier` in `page.tsx`), so it never runs during the prerender of that `'use client'` page. Until it resolves, and if it fails outright, the card falls back to the plain-text `body`.
+- DOMPurify is loaded with a dynamic `import()` shared across cards (`loadPurifier` in `src/hooks/useSanitisedHtml.ts`), so it never runs during the prerender of the `'use client'` page. Until it resolves, and if it fails outright, the card falls back to the plain-text `body`.
 - **A DOMPurify instance is itself callable** (`DOMPurify(window)` binds a new one), so it must never be passed straight to a `setState`: React would take it for an updater, call it with the previous state, and store the window-less factory that `DOMPurify(null)` returns, which has no `addHook` or `sanitize`. `useSanitisedHtml` holds it in a `{ purify }` wrapper so that mistake is a type error rather than a runtime one.
 
 **Images.** `cid:` references are rewritten to `/api/contacts/{id}/emails/{emailId}/attachments/{attId}?inline=1`; a `cid:` with no matching attachment row has its `<img>` removed rather than left broken (which is what backfilled emails look like, since inline parts were discarded before they were stored). Attachments with `inline = 1` are filtered out of the attachment chip rows.
@@ -184,7 +184,7 @@ Inline (`cid:`) images are a different matter and *are* stored in R2, but they a
 **Plain-text extraction (`src/lib/html-to-text.mjs`).** Deliberately plain ESM, not TypeScript, so the receiver (via wrangler's esbuild) and `scripts/backfill-html-bodies.mjs` (via bare node) share one implementation; live ingest and the migration must derive identical text for the same input. Quoted sections get the `> ` prefix so `splitQuote` still works on the derived text. Its output is only ever rendered as escaped text, so it is **not** a security boundary.
 
 ## Shared constants
-- `isValidEmail` is exported from `src/app/api/contacts/route.ts` for server-side use. It is also defined inline in `page.tsx` for client-side use; this duplication is intentional (different environments); do not consolidate.
+- `isValidEmail` is exported from `src/app/api/contacts/route.ts` for server-side use. It is also defined in `src/lib/format.ts` for client-side use; this duplication is intentional (different environments); do not consolidate.
 - `src/lib/html-to-text.mjs` is a deliberate exception to that rule: the receiver and the backfill script import the same file, because a divergence between them would make migrated rows read differently from newly received ones.
 - `src/lib/mime.ts` (`encodeHeaderText`) is shared the same way, between `send-emails/route.ts` and the receiver: both build raw MIME messages and must encode non-ASCII headers identically.
 - `SEND_ADDRS` is **not** a shared constant; it comes from `env.SEND_ADDRS` at runtime (server) or `/api/config` (client). `/api/config` is public so the login page can show the organisation name, but it only includes `sendAddrs` for authenticated requests; it checks the `__remember` cookie against KV itself, since middleware waves the route through.
@@ -244,8 +244,19 @@ The `REMEMBER_COOKIE` constant is defined identically in both `middleware.ts` an
 ### Password comparison
 `/api/auth` uses a manual XOR-reduce constant-time comparison (`a[i] ^ b[i]` accumulated into a single `diff`) to avoid leaking password length or content via timing. Do not replace with a plain `===` comparison.
 
+## Client structure
+`page.tsx` holds `OutreachPage`: all page-level state, the fetch handlers, the polling loop and the layout. Everything presentational or self-contained lives in its own module and receives state via props:
+
+- `src/lib/types.ts`: the client-side interfaces (`Contact`, `EmailRecord`, `SearchResult`, ...).
+- `src/lib/format.ts`: pure helpers (`isValidEmail`, `validateCc`, `splitQuote`, `formatDate`, `formatSize`, `fuzzyMatch`, `hexToRgba`).
+- `src/components/`: `ContactSidebar`, `ContactForm`, `EmailCard`, `NewEmailCard`, `EmailFrame`, `SendModal`, `TagChip`, `ReplyPreview`, `AttachmentChip`, `SnippetText`, plus `styles.ts` with the shared Tailwind class strings.
+- `src/hooks/useSanitisedHtml.ts`: DOMPurify loading and HTML sanitisation per card.
+- `src/hooks/useEmailSearch.ts`: the debounced server-side message search (query state, results, 503 handling).
+
+Components take callbacks rather than reaching for shared state; `EmailCard` and `NewEmailCard` receive `onSave`/`onSend`/`onDelete` handlers defined in `OutreachPage`, which is the only place that mutates server data.
+
 ## Client fetch pattern
-All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined inside `OutreachPage`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).
+All API `fetch` calls go through the `apiFetch` wrapper (defined inside `OutreachPage` and passed to `useEmailSearch`), which redirects to `/login` on any 401 response. Two exceptions use raw `fetch` deliberately: the logout `DELETE /api/auth` (redirect is handled explicitly after it) and the `ContactForm` `/api/tags` fetch (non-critical autocomplete in a subcomponent without a router).
 
 ## Client state (page.tsx)
 - **Polling**: a 5-second `setInterval` (`POLL_INTERVAL_MS`) reads `/api/revision`, and only when that counter has moved does it refetch `/api/contacts/{id}/emails`, `/api/contacts` and `/api/send-emails`. An idle tab therefore costs one indexed row read per tick instead of three list queries. A `visibilitychange` listener pauses polling when the tab is hidden and fires an immediate poll when it becomes visible again. Do not remove this without an alternative refresh mechanism.
@@ -257,7 +268,7 @@ All `fetch` calls in `page.tsx` go through the `apiFetch` wrapper (defined insid
   - The poll effect runs whether or not a contact is selected; only the emails fetch is skipped when `selectedId` is null. It used to return early, which left the contact list and the pending badge stale on the empty state. With the revision gate that no longer costs anything.
 - **Contact persistence**: the selected contact ID is stored in `localStorage` under the key `mf_contact` and restored on mount (a corrupt value falls back to null rather than becoming a NaN id). This survives page reloads and browser restarts.
 - **Stale responses**: `fetchEmails` drops a response when the user has switched contacts while it was in flight (`selectedIdRef`), so a slow fetch cannot overwrite the newly selected thread.
-- **HTML bodies**: `useSanitisedHtml` memoises on a `cidKey` built from the attachment ids and content IDs rather than on the array itself, because a poll that does refetch hands back a fresh array and would otherwise re-sanitise and rebuild the injected DOM.
+- **HTML bodies**: `useSanitisedHtml` (in `src/hooks/`) memoises on a `cidKey` built from the attachment ids and content IDs rather than on the array itself, because a poll that does refetch hands back a fresh array and would otherwise re-sanitise and rebuild the injected DOM.
 
 ## CC delivery
 Outgoing CC addresses are stored as a comma-separated string in the `cc` column and validated in the email POST and PATCH handlers, so an invalid address is rejected at composition rather than surfacing at send time. At send time (`send-emails/route.ts`), the raw email is delivered separately to each CC address (one `EMAIL_SENDER.send()` call per address) rather than relying on the SMTP `Cc:` header for delivery. The `Cc:` header is still included in each copy for recipient visibility.

@@ -1,813 +1,19 @@
 'use client';
 
-import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { sanitiseEmailHtml, buildEmailDocument, type SanitisedEmail } from '@/lib/email-html';
-import type { DOMPurify as Purifier } from 'dompurify';
-const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
-
-// ─── Types ────────────────────────────────────────────────────────────────────
-
-interface AppConfig {
-    orgName: string;
-    sendAddrs: string[];
-}
-
-interface Tag {
-    id: number;
-    name: string;
-    color: string;
-}
-
-interface Contact {
-    id: number;
-    name: string;
-    email: string;
-    description: string | null;
-    tags: Tag[];
-    awaiting_reply: number;
-}
-
-interface Attachment {
-    id: number;
-    filename: string;
-    content_type: string;
-    size: number;
-    content_id: string | null;
-    /** 1 = embedded in body_html via cid:, so not listed as a file. */
-    inline: number;
-}
-
-interface EmailRecord {
-    id: number;
-    contact_id: number;
-    thread_id: number;
-    parent_id: number | null;
-    sender: string | null;
-    sent_at: string | null;
-    subject: string | null;
-    body: string;
-    /** HTML alternative; null means body is the only rendition. */
-    body_html: string | null;
-    recipient: string | null;
-    cc: string | null;
-    attachments: Attachment[];
-}
-
-interface SearchResult {
-    id: number;
-    contact_id: number;
-    contact_name: string;
-    contact_email: string;
-    sender: string | null;
-    sent_at: string | null;
-    subject: string | null;
-    /** Body extract with matched terms wrapped in HIT_OPEN/HIT_CLOSE. */
-    snippet: string;
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const inputCls = 'w-full bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 placeholder:text-white/40 font-sans';
-
-const validateCc = (cc: string): string | null => {
-    if (!cc.trim()) return null;
-    const invalid = cc.split(',').map(a => a.trim()).filter(a => a && !isValidEmail(a));
-    return invalid.length > 0 ? `Invalid: ${invalid.join(', ')}` : null;
-};
-const btnPrimary = 'text-sm font-bold px-4 py-2 bg-white/80 text-black hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer font-sans';
-const btnGhost = 'text-sm px-4 py-2 border border-white/20 text-white/75 hover:text-white hover:border-white/40 transition-colors cursor-pointer font-sans';
-const btnDanger = 'text-xs leading-none text-red-400/60 hover:text-red-400 transition-colors cursor-pointer';
-
-// Must match HIT_OPEN/HIT_CLOSE in api/search/route.ts. Duplicated for the same
-// reason as isValidEmail: importing a route module into the client bundle to
-// share two characters is the worse trade.
-const HIT_OPEN = '\u0002';
-const HIT_CLOSE = '\u0003';
-
-/**
- * Render a snippet's matched runs as <mark>. The delimiters are control
- * characters that cannot occur in a body, so a plain split is unambiguous, and
- * every piece stays text: no markup from an email is ever injected here.
- */
-function SnippetText({ snippet }: { snippet: string }) {
-    const pieces = snippet.split(HIT_OPEN).flatMap((chunk, i) => {
-        if (i === 0) return [{ hit: false, text: chunk }];
-        const [hit, ...rest] = chunk.split(HIT_CLOSE);
-        return [{ hit: true, text: hit }, { hit: false, text: rest.join(HIT_CLOSE) }];
-    });
-    return (
-        <>
-            {pieces.map((piece, i) => piece.hit
-                ? <mark key={i} className="bg-[#ffd54f]/25 text-[#ffd54f] rounded-[1px]">{piece.text}</mark>
-                : <span key={i}>{piece.text}</span>)}
-        </>
-    );
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-    const h = hex.replace('#', '');
-    const r = parseInt(h.slice(0, 2), 16) || 0;
-    const g = parseInt(h.slice(2, 4), 16) || 0;
-    const b = parseInt(h.slice(4, 6), 16) || 0;
-    return `rgba(${r},${g},${b},${alpha})`;
-}
-
-function formatSize(bytes: number): string {
-    if (bytes < 1024) return `${bytes}B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}kB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-}
-
-function fuzzyMatch(query: string, target: string): boolean {
-    const q = query.toLowerCase();
-    const t = target.toLowerCase();
-    let qi = 0;
-    for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-        if (t[ti] === q[qi]) qi++;
-    }
-    return qi === q.length;
-}
-
-function formatDate(iso: string): string {
-    try {
-        return new Date(iso).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
-    } catch {
-        return iso;
-    }
-}
-
-function splitQuote(body: string): { main: string; quote: string | null } {
-    const normalised = body.replace(/\r\n/g, '\n');
-    const match = normalised.match(/\n\nOn .+? wrote:/);
-    if (!match || match.index === undefined) return { main: normalised.trimEnd(), quote: null };
-    return {
-        main: normalised.slice(0, match.index).trimEnd(),
-        quote: normalised.slice(match.index + 2).trimEnd(),
-    };
-}
-
-/**
- * DOMPurify is imported on demand rather than at module scope: it must not run
- * during the prerender of this client page, and its weight should only be paid
- * once an HTML email is actually on screen. The promise is shared so that a
- * thread full of HTML emails resolves one module.
- */
-let purifyPromise: Promise<Purifier> | null = null;
-
-function loadPurifier(): Promise<Purifier> {
-    if (!purifyPromise) {
-        purifyPromise = import('dompurify')
-            .then(({ default: purify }) => {
-                if (typeof purify?.addHook !== 'function'
-                    || typeof purify?.sanitize !== 'function') {
-                    // A DOMPurify evaluated without a usable window returns a bare
-                    // factory instead of an instance, which would otherwise fail
-                    // later with a confusing "addHook is not a function".
-                    throw new Error('dompurify resolved without a usable instance');
-                }
-                return purify;
-            })
-            .catch(err => {
-                // Allow a later card to retry rather than wedging on one failure.
-                purifyPromise = null;
-                throw err;
-            });
-    }
-    return purifyPromise;
-}
-
-/**
- * Sanitise an email's HTML body, or null when it has none or the sanitiser has
- * not loaded yet. Callers fall back to the plain-text body in both cases, so a
- * failed import degrades to readable text rather than an empty card.
- */
-function useSanitisedHtml(email: EmailRecord, loadImages: boolean): SanitisedEmail | null {
-    // Held in a wrapper object, not as the bare instance. A DOMPurify instance is
-    // itself callable, so passing it straight to a setState would be taken for an
-    // updater function: React would invoke it with the previous state, and
-    // DOMPurify(null) returns a window-less factory with no addHook or sanitize.
-    // The wrapper makes that mistake a type error rather than a runtime one.
-    const [loadedPurifier, setLoadedPurifier] =
-        useState<{ purify: Purifier } | null>(null);
-    const purifier = loadedPurifier?.purify ?? null;
-    // Only inbound mail is rendered as HTML. Our own messages are composed as
-    // plain text, so they are shown that way: the HTML rendition of a sent reply
-    // exists to carry the quote chain to the recipient, not to be read back here.
-    // It stays in body_html regardless, because the next reply quotes it.
-    const html = email.sender === null ? email.body_html : null;
-    // Polling replaces the attachment array every 10 seconds; depend on the cid
-    // mapping itself so a poll does not re-sanitise and rebuild the DOM.
-    const cidKey = email.attachments
-        .map(a => `${a.id}:${a.content_id ?? ''}`)
-        .join(',');
-
-    useEffect(() => {
-        if (!html || purifier) return;
-        let cancelled = false;
-        loadPurifier()
-            .then(purify => { if (!cancelled) setLoadedPurifier({ purify }); })
-            .catch(err => {
-                // Never silent: the card falls back to plain text, and without a
-                // log there is nothing to distinguish that from an email that
-                // simply had no HTML part.
-                console.error('Could not load the HTML sanitiser', err);
-            });
-        return () => { cancelled = true; };
-    }, [html, purifier]);
-
-    return useMemo(() => {
-        if (!html || !purifier) return null;
-        try {
-            return sanitiseEmailHtml(purifier, html, {
-                contactId: email.contact_id,
-                emailId: email.id,
-                attachments: email.attachments,
-                loadImages,
-            });
-        } catch (err) {
-            // One unrenderable body must not take the whole page down with it.
-            // Returning null falls the card back to its plain-text rendition,
-            // which is always populated.
-            console.error(`Could not render HTML body of email ${email.id}`, err);
-            return null;
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [html, purifier, email.contact_id, email.id, cidKey, loadImages]);
-}
-
-/** Guards against an email whose own CSS inflates the document indefinitely. */
-const MAX_FRAME_HEIGHT = 20000;
-const MIN_FRAME_HEIGHT = 24;
-
-/**
- * Render a sanitised email in an isolated frame.
- *
- * `sandbox` without `allow-scripts` means nothing in the message can execute, so
- * `allow-same-origin` is safe and lets us read the document to size the frame to
- * its content. `allow-popups` is what makes links clickable, since a sandboxed
- * frame otherwise blocks the new tab, and `allow-popups-to-escape-sandbox` stops
- * the opened page inheriting these restrictions.
- *
- * If the document cannot be read for any reason the card falls back to the
- * plain-text rendition rather than showing an empty box.
- */
-function EmailFrame({ srcDoc, fallback }: { srcDoc: string; fallback: ReactNode }) {
-    const frameRef = useRef<HTMLIFrameElement>(null);
-    const observerRef = useRef<ResizeObserver | null>(null);
-    const [height, setHeight] = useState(80);
-    const [failed, setFailed] = useState(false);
-
-    useEffect(() => () => observerRef.current?.disconnect(), []);
-
-    const handleLoad = () => {
-        const body = frameRef.current?.contentDocument?.body;
-        if (!body) {
-            console.error('Email frame document was not readable; showing plain text.');
-            setFailed(true);
-            return;
-        }
-        // body height stays content-driven while the frame's own height is set
-        // from it, so measuring the body cannot feed back into itself the way
-        // measuring documentElement would.
-        const measure = () => {
-            const target = frameRef.current?.contentDocument?.body;
-            if (!target) return;
-            // Floored so that an email which hides its own content, or has none,
-            // leaves a visible sliver rather than a card that looks broken.
-            setHeight(Math.max(
-                MIN_FRAME_HEIGHT,
-                Math.min(target.scrollHeight, MAX_FRAME_HEIGHT)));
-        };
-        // Deferred a frame so the first measurement does not force a synchronous
-        // layout inside the load handler, which the browser warns about and which
-        // can read a height taken before the frame's styles have settled.
-        requestAnimationFrame(measure);
-        // Images finish arriving after the document does, and expanding the quote
-        // reflows it, so the height has to keep tracking the content.
-        observerRef.current?.disconnect();
-        const observer = new ResizeObserver(measure);
-        observer.observe(body);
-        observerRef.current = observer;
-    };
-
-    if (failed) return <>{fallback}</>;
-
-    return (
-        <iframe
-            ref={frameRef}
-            title="Email message"
-            srcDoc={srcDoc}
-            onLoad={handleLoad}
-            sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox"
-            className="mf-email-frame"
-            style={{ height }}
-        />
-    );
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-
-function TagChip({ tag, onRemove }: { tag: { name: string; color: string }; onRemove?: () => void }) {
-    return (
-        <span
-            className="text-xs px-2 py-0.5 font-medium font-sans flex items-center gap-1"
-            style={{
-                color: tag.color,
-                backgroundColor: hexToRgba(tag.color, 0.10),
-                border: `1px solid ${hexToRgba(tag.color, 0.20)}`,
-            }}
-        >
-            {tag.name}
-            {onRemove && (
-                <button onClick={onRemove} className="leading-none opacity-50 hover:opacity-100 cursor-pointer ml-0.5">✕</button>
-            )}
-        </span>
-    );
-}
-
-function ContactForm({ value, onChange, onSave, onCancel, saving, saveError }: {
-    value: Partial<Contact>;
-    onChange: (v: Partial<Contact>) => void;
-    onSave: () => void;
-    onCancel: () => void;
-    saving?: boolean;
-    saveError?: string | null;
-}) {
-    const [emailError, setEmailError] = useState<string | null>(null);
-    const [tagInput, setTagInput] = useState('');
-    const [tagColor, setTagColor] = useState('#888888');
-    const [allTags, setAllTags] = useState<Tag[]>([]);
-
-    useEffect(() => {
-        fetch('/api/tags').then(r => r.json()).then((d: unknown) => setAllTags(((d as { tags?: Tag[] }).tags) ?? []));
-    }, []);
-
-    const currentTags = value.tags ?? [];
-    const matchedTag = allTags.find(t => t.name.toLowerCase() === tagInput.trim().toLowerCase());
-    const effectiveColor = matchedTag ? matchedTag.color : tagColor;
-
-    const addTag = () => {
-        const name = tagInput.trim();
-        if (!name) return;
-        if (currentTags.some(t => t.name.toLowerCase() === name.toLowerCase())) return;
-        onChange({ ...value, tags: [...currentTags, { id: matchedTag?.id ?? 0, name: matchedTag?.name ?? name, color: effectiveColor }] });
-        setTagInput('');
-        setTagColor('#888888');
-    };
-
-    const field = (key: keyof Contact) => ({
-        value: (value[key] as string) ?? '',
-        onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-            onChange({ ...value, [key]: e.target.value || null }),
-    });
-
-    return (
-        <div className="flex flex-col gap-3">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <input className={inputCls} placeholder="Name *" {...field('name')} />
-                <div className="flex flex-col gap-1">
-                    <input
-                        className={`${inputCls}${emailError ? ' border-red-400/60' : ''}`}
-                        placeholder="Email *"
-                        type="email"
-                        {...field('email')}
-                        onFocus={() => setEmailError(null)}
-                        onBlur={() => setEmailError(value.email && !isValidEmail(value.email) ? 'Invalid email address' : null)}
-                    />
-                    {emailError && <p className="text-xs text-red-400 font-sans">{emailError}</p>}
-                </div>
-            </div>
-            <textarea
-                className={`${inputCls} resize-y min-h-[60px]`}
-                placeholder="Description"
-                rows={3}
-                value={value.description ?? ''}
-                onChange={e => onChange({ ...value, description: e.target.value || null })}
-            />
-            <div className="flex flex-col gap-2">
-                <div className="flex gap-2">
-                    <input
-                        className={inputCls}
-                        placeholder="Add tag…"
-                        value={tagInput}
-                        onChange={e => setTagInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
-                    />
-                    <input
-                        type="color"
-                        value={effectiveColor}
-                        onChange={e => setTagColor(e.target.value)}
-                        disabled={!!matchedTag}
-                        title={matchedTag ? 'Color set by existing tag' : 'Pick color'}
-                        className="shrink-0 border border-white/15 bg-white/[0.07] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                        style={{ width: 42, height: 42, padding: 3 }}
-                    />
-                    <button type="button" onClick={addTag} className={btnGhost}>Add</button>
-                </div>
-                {currentTags.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
-                        {currentTags.map(t => (
-                            <TagChip key={t.name} tag={t} onRemove={() => onChange({ ...value, tags: currentTags.filter(x => x.name !== t.name) })} />
-                        ))}
-                    </div>
-                )}
-            </div>
-            {saveError && <p className="text-xs text-red-400 font-sans">{saveError}</p>}
-            <div className="flex gap-2">
-                <button className={btnPrimary} onClick={onSave} disabled={saving || !value.name?.trim() || !isValidEmail(value.email ?? '')}>
-                    {saving ? 'Saving…' : 'Save'}
-                </button>
-                <button className={btnGhost} onClick={onCancel}>Cancel</button>
-            </div>
-        </div>
-    );
-}
-
-function ReplyPreview({ email, contactName, orgName }: { email: EmailRecord; contactName: string; orgName: string }) {
-    const sender = email.sender !== null ? orgName : contactName;
-    const preview = email.body.length > 80 ? email.body.slice(0, 80) + '…' : email.body;
-    return (
-        <div className="border-l-2 border-white/25 pl-2 mb-1">
-            <span className="text-xs text-white/55 font-sans leading-snug">
-                ↩ {sender}{email.subject ? ` — ${email.subject}` : ''} • {preview}
-            </span>
-        </div>
-    );
-}
-
-function AttachmentChip({ att, href, onDelete }: {
-    att: Attachment;
-    href: string;
-    onDelete?: () => void;
-}) {
-    return (
-        <div className="flex items-center gap-1.5 text-xs text-white/60 bg-white/5 border border-white/10 px-2 py-1 font-sans">
-            <a href={href} download={att.filename} className="hover:text-white/90 transition-colors">
-                {att.filename}
-            </a>
-            <span className="text-white/35">{formatSize(att.size)}</span>
-            {onDelete && (
-                <button onClick={onDelete} className="text-white/30 hover:text-red-400 transition-colors cursor-pointer ml-0.5 leading-none">✕</button>
-            )}
-        </div>
-    );
-}
-
-function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, threadSender, senderEditable, highlighted, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
-    email: EmailRecord;
-    contactName: string;
-    parentEmail?: EmailRecord | null;
-    orgName: string;
-    sendAddrs: string[];
-    threadSender: string | null;
-    senderEditable: boolean;
-    /** Outlined because a search result pointed here. */
-    highlighted: boolean;
-    onReply: () => void;
-    onDelete: () => void;
-    onEdit: (sender: string | null, subject: string, body: string, cc: string) => Promise<void>;
-    onSend: () => Promise<void>;
-    onAttachmentUpload: (file: File) => Promise<void>;
-    onAttachmentDelete: (attachmentId: number) => Promise<void>;
-    onEditingChange: (editing: boolean) => void;
-}) {
-    const isUs = email.sender !== null;
-    const [editing, setEditing] = useState(false);
-    // Registered only while actually editing: reporting `false` on mount would
-    // clear the page's editing state for a *different* card whenever a new
-    // email arrives mid-edit. The cleanup also unregisters when the card
-    // unmounts.
-    useEffect(() => {
-        if (!editing) return;
-        onEditingChange(true);
-        return () => onEditingChange(false);
-    }, [editing]); // eslint-disable-line react-hooks/exhaustive-deps
-    const [editSenderAddr, setEditSenderAddr] = useState(email.sender ?? sendAddrs[0] ?? '');
-    const [editSubject, setEditSubject] = useState(email.subject ?? '');
-    const [editBody, setEditBody] = useState(email.body);
-    const [editCc, setEditCc] = useState(email.cc ?? '');
-    const [editCcError, setEditCcError] = useState<string | null>(null);
-    const [editSaving, setEditSaving] = useState(false);
-    const [sending, setSending] = useState(false);
-    const [uploading, setUploading] = useState(false);
-    const [uploadError, setUploadError] = useState<string | null>(null);
-    const [quoteExpanded, setQuoteExpanded] = useState(false);
-    // Deliberately not persisted: the decision to contact a sender's server
-    // should be made again on a fresh view rather than inherited.
-    const [loadImages, setLoadImages] = useState(false);
-    const sanitised = useSanitisedHtml(email, loadImages);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-
-    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        e.target.value = '';
-        setUploadError(null);
-        setUploading(true);
-        try {
-            await onAttachmentUpload(file);
-        } catch (err) {
-            setUploadError(err instanceof Error ? err.message : 'Upload failed');
-        } finally {
-            setUploading(false);
-        }
-    };
-
-    const senderLocked = isUs && !senderEditable;
-    const editSender = senderLocked ? threadSender : (editSenderAddr || null);
-
-    const saveEdit = async () => {
-        setEditSaving(true);
-        try {
-            await onEdit(editSender, editSubject, editBody, editCc);
-            setEditing(false);
-        } finally {
-            setEditSaving(false);
-        }
-    };
-
-    const cancelEdit = () => {
-        setEditing(false);
-        setEditSenderAddr(email.sender ?? sendAddrs[0] ?? '');
-        setEditSubject(email.subject ?? '');
-        setEditBody(email.body);
-        setEditCc(email.cc ?? '');
-        setEditCcError(null);
-    };
-
-    const handleSend = async () => {
-        setSending(true);
-        try {
-            await onSend();
-        } finally {
-            setSending(false);
-        }
-    };
-
-    const displayIsUs = isUs;
-    // The outline marks the card a search result jumped to, and fades on its own.
-    const cardCls = `flex flex-col gap-2 p-4 border transition-shadow ${displayIsUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}${highlighted ? ' shadow-[0_0_0_2px_#ffd54f]' : ''}`;
-
-    if (editing) {
-        return (
-            <div id={`email-${email.id}`} className={`${cardCls} gap-3`}>
-                <div className="flex flex-col gap-1">
-                    <div className="flex gap-2 items-center">
-                        {senderLocked ? (
-                            <div className="w-48 shrink-0 text-sm font-sans text-white/35 border border-white/10 bg-white/[0.04] px-3 py-2.5">{threadSender}</div>
-                        ) : (
-                            <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={editSenderAddr} onChange={e => setEditSenderAddr(e.target.value)}>
-                                {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
-                            </select>
-                        )}
-                        <div className="flex-[1_1_160px] min-w-0 overflow-hidden">
-                            <input
-                                className={inputCls}
-                                placeholder="CC (comma-separated)"
-                                value={editCc}
-                                onChange={e => { setEditCc(e.target.value); if (editCcError) setEditCcError(validateCc(e.target.value)); }}
-                                onBlur={e => setEditCcError(validateCc(e.target.value))}
-                            />
-                        </div>
-                    </div>
-                    {editCcError && <p className="text-xs text-red-400 font-sans">{editCcError}</p>}
-                </div>
-                <input
-                    className={inputCls}
-                    placeholder="Subject"
-                    value={editSubject}
-                    onChange={e => setEditSubject(e.target.value)}
-                />
-                <textarea
-                    className={`${inputCls} resize-y min-h-[120px]`}
-                    rows={6}
-                    value={editBody}
-                    onChange={e => setEditBody(e.target.value)}
-                />
-                <div className="flex flex-wrap items-center gap-2">
-                    {email.attachments.map(att => (
-                        <AttachmentChip
-                            key={att.id}
-                            att={att}
-                            href={`/api/contacts/${email.contact_id}/emails/${email.id}/attachments/${att.id}`}
-                            onDelete={() => onAttachmentDelete(att.id)}
-                        />
-                    ))}
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={uploading}
-                        className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans disabled:opacity-40"
-                    >
-                        {uploading ? 'Uploading…' : 'Attach'}
-                    </button>
-                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
-                    {uploadError && <span className="text-xs text-red-400 font-sans">{uploadError}</span>}
-                </div>
-                <div className="flex gap-2">
-                    <button className={btnPrimary} onClick={saveEdit} disabled={editSaving || !editBody.trim() || !!editCcError}>
-                        {editSaving ? 'Saving…' : 'Save'}
-                    </button>
-                    <button className={btnGhost} onClick={cancelEdit}>Cancel</button>
-                </div>
-            </div>
-        );
-    }
-
-    const { main: bodyMain, quote: bodyQuote } = splitQuote(email.body);
-    // Until the sanitiser resolves, the plain-text rendition stands in; it is
-    // also the permanent fallback if the dynamic import fails.
-    const showHtml = sanitised !== null;
-    const quoteContent = showHtml ? sanitised.quote : bodyQuote;
-    // Only what is actually on screen: the quote's images are not in the frame
-    // document until it is expanded, so offering to load them would do nothing.
-    const blockedImages = showHtml
-        ? sanitised.blockedImages
-            + (quoteExpanded ? sanitised.blockedImagesInQuote : 0)
-        : 0;
-    const fileAttachments = email.attachments.filter(att => att.inline === 0);
-    // Used both as the plain-text rendition and as the frame's fallback.
-    const textBody = (
-        <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{bodyMain}</p>
-    );
-
-    return (
-        <div id={`email-${email.id}`} className={cardCls}>
-            {parentEmail && <ReplyPreview email={parentEmail} contactName={contactName} orgName={orgName} />}
-            <div className="flex items-start justify-between gap-2">
-                <div className="flex items-baseline gap-2 min-w-0">
-                    <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? orgName : contactName}</span>
-                    {isUs && email.sender && <span className="text-xs text-white/35 font-sans truncate">{email.sender}</span>}
-                </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
-                    {!isUs && email.recipient && (
-                        <span className="text-xs text-white/35 font-sans">→ {email.recipient.split('@')[0]}</span>
-                    )}
-                    {email.sent_at !== null ? (
-                        <span className="text-xs text-white/60 font-sans">{formatDate(email.sent_at)}</span>
-                    ) : isUs ? (
-                        <button className="text-xs text-[#ffd54f]/60 hover:text-[#ffd54f] border border-[#ffd54f]/25 hover:border-[#ffd54f]/55 px-2 py-0.5 transition-colors cursor-pointer font-sans disabled:opacity-40" onClick={handleSend} disabled={sending || !!(parentEmail && parentEmail.sent_at === null)}>{sending ? 'Sending…' : 'Send'}</button>
-                    ) : null}
-                    {email.sent_at === null && (
-                        <button className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans" onClick={() => setEditing(true)}>Edit</button>
-                    )}
-                    {!isUs && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>}
-                    <button className={btnDanger} onClick={onDelete} title="Delete email">✕</button>
-                </div>
-            </div>
-            {email.cc && (
-                <div className="text-xs text-white/40 font-sans">CC: {email.cc}</div>
-            )}
-            {email.subject && !email.parent_id && (
-                <div className="text-xs text-white/45 font-sans">{email.subject}</div>
-            )}
-            {showHtml ? (
-                <EmailFrame
-                    srcDoc={buildEmailDocument(sanitised, quoteExpanded)}
-                    fallback={textBody}
-                />
-            ) : textBody}
-            {(quoteContent !== null || blockedImages > 0) && (
-                <div className="mt-1">
-                    <div className="flex items-center gap-2">
-                        {quoteContent !== null && (
-                            <button
-                                onClick={() => setQuoteExpanded(v => !v)}
-                                className={`text-xs px-1.5 py-0.5 border transition-colors cursor-pointer font-sans ${quoteExpanded ? 'text-white/70 border-white/45' : 'text-white/40 hover:text-white/65 border-white/25 hover:border-white/45'}`}
-                                title={quoteExpanded ? 'Hide quoted text' : 'Show quoted text'}
-                            >···</button>
-                        )}
-                        {blockedImages > 0 && (
-                            <button
-                                onClick={() => setLoadImages(true)}
-                                className="text-xs px-1.5 py-0.5 border text-white/40 hover:text-white/65 border-white/25 hover:border-white/45 transition-colors cursor-pointer font-sans"
-                                title="Fetch remote images through the server; the sender learns the message was opened"
-                            >Load images ({blockedImages})</button>
-                        )}
-                    </div>
-                    {/* An HTML quote is rendered inside the frame with the rest of
-                        the message, so only the plain-text path expands here. */}
-                    {quoteExpanded && quoteContent !== null && !showHtml && (
-                        <p className="text-sm text-white/45 whitespace-pre-wrap leading-relaxed font-sans mt-2 border-l-2 border-white/20 pl-3">{quoteContent}</p>
-                    )}
-                </div>
-            )}
-            {fileAttachments.length > 0 && (
-                <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {fileAttachments.map(att => (
-                        <AttachmentChip
-                            key={att.id}
-                            att={att}
-                            href={`/api/contacts/${email.contact_id}/emails/${email.id}/attachments/${att.id}`}
-                            onDelete={email.sent_at === null && isUs ? () => onAttachmentDelete(att.id) : undefined}
-                        />
-                    ))}
-                </div>
-            )}
-        </div>
-    );
-}
-
-function NewEmailCard({ replyTo, contactName, orgName, sendAddrs, threadSender, saving, onSave, onCancel }: {
-    replyTo: EmailRecord | null;
-    contactName: string;
-    orgName: string;
-    sendAddrs: string[];
-    threadSender: string | null;
-    saving: boolean;
-    onSave: (sender: string | null, subject: string, body: string, cc: string, files: File[]) => void;
-    onCancel: () => void;
-}) {
-    // When replying, lock the sender to the address that received the inbound email.
-    const effectiveThreadSender = threadSender ?? (replyTo?.sender === null ? replyTo.recipient : null) ?? null;
-    const replyAsSender = effectiveThreadSender ?? sendAddrs[0] ?? '';
-    const initialSubject = replyTo?.subject ? `Re: ${replyTo.subject.replace(/^(Re:\s*)+/i, '')}` : '';
-    const [senderAddr, setSenderAddr] = useState(replyAsSender);
-    const [subject, setSubject] = useState(initialSubject);
-    const [cc, setCc] = useState(replyTo?.cc ?? '');
-    const [ccError, setCcError] = useState<string | null>(null);
-    const [body, setBody] = useState('');
-    const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-    const fileInputRef = useRef<HTMLInputElement>(null);
-
-    const addrLocked = effectiveThreadSender !== null;
-    const effectiveAddr = addrLocked ? effectiveThreadSender! : senderAddr;
-    const sender = effectiveAddr || null;
-    const cardCls = 'flex flex-col gap-3 p-4 border ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]';
-
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        e.target.value = '';
-        setPendingFiles(prev => [...prev, file]);
-    };
-
-    return (
-        <div className={cardCls}>
-            {replyTo && <ReplyPreview email={replyTo} contactName={contactName} orgName={orgName} />}
-            <div className="flex flex-col gap-1">
-                <div className="flex gap-2 items-center">
-                    {addrLocked ? (
-                        <span className="w-48 shrink-0 text-sm font-sans text-white/35 flex items-center border border-white/10 bg-white/[0.04] px-3 py-2.5">{effectiveThreadSender}</span>
-                    ) : (
-                        <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={senderAddr} onChange={e => setSenderAddr(e.target.value)}>
-                            {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
-                        </select>
-                    )}
-                    <div className="flex-[1_1_160px] min-w-0 overflow-hidden">
-                        <input
-                            className={inputCls}
-                            placeholder="CC (comma-separated)"
-                            value={cc}
-                            onChange={e => { setCc(e.target.value); if (ccError) setCcError(validateCc(e.target.value)); }}
-                            onBlur={e => setCcError(validateCc(e.target.value))}
-                        />
-                    </div>
-                </div>
-                {ccError && <p className="text-xs text-red-400 font-sans">{ccError}</p>}
-            </div>
-            <input className={inputCls} placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} />
-            <textarea
-                className={`${inputCls} resize-y min-h-[120px]`}
-                rows={6}
-                placeholder="Email body *"
-                value={body}
-                onChange={e => setBody(e.target.value)}
-            />
-            <div className="flex flex-wrap items-center gap-2">
-                {pendingFiles.map((file, idx) => (
-                    <div key={idx} className="flex items-center gap-1.5 text-xs text-white/60 bg-white/5 border border-white/10 px-2 py-1 font-sans">
-                        <span>{file.name}</span>
-                        <span className="text-white/35">{formatSize(file.size)}</span>
-                        <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))} className="text-white/30 hover:text-red-400 transition-colors cursor-pointer ml-0.5 leading-none">✕</button>
-                    </div>
-                ))}
-                <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans"
-                >
-                    Attach
-                </button>
-                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
-            </div>
-            <div className="flex gap-2">
-                <button className={btnPrimary} onClick={() => onSave(sender, subject, body, cc, pendingFiles)} disabled={saving || !body.trim() || !!ccError}>
-                    {saving ? 'Saving…' : 'Add Email'}
-                </button>
-                <button className={btnGhost} onClick={onCancel}>Cancel</button>
-            </div>
-        </div>
-    );
-}
-
-// ─── Main page ─────────────────────────────────────────────────────────────────
+import type { AppConfig, Attachment, Contact, EmailRecord, SearchResult } from '@/lib/types';
+import { fuzzyMatch } from '@/lib/format';
+import { useEmailSearch } from '@/hooks/useEmailSearch';
+import { ContactSidebar } from '@/components/ContactSidebar';
+import { ContactForm } from '@/components/ContactForm';
+import { EmailCard } from '@/components/EmailCard';
+import { NewEmailCard } from '@/components/NewEmailCard';
+import { SendModal, type SendResult } from '@/components/SendModal';
+import { TagChip } from '@/components/TagChip';
+import { btnGhost } from '@/components/styles';
 
 const POLL_INTERVAL_MS = 5_000;
-
-// Long enough that typing a word is one query rather than five, short enough
-// that the results feel attached to the keystrokes.
-const SEARCH_DEBOUNCE_MS = 250;
-const MIN_SEARCH_CHARS = 2;
 const HIGHLIGHT_MS = 2_500;
 
 // A refetch is forced this often regardless of the revision, so a write path
@@ -841,12 +47,7 @@ export default function OutreachPage() {
     const [addContactForm, setAddContactForm] = useState<Partial<Contact>>({});
     const [editContact, setEditContact] = useState<Partial<Contact> | null>(null);
     const [contactSaveError, setContactSaveError] = useState<string | null>(null);
-    const [searchQuery, setSearchQuery] = useState('');
     const [filterAwaiting, setFilterAwaiting] = useState(false);
-    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-    const [searchTruncated, setSearchTruncated] = useState(false);
-    const [searchLoading, setSearchLoading] = useState(false);
-    const [searchUnavailable, setSearchUnavailable] = useState(false);
     // Set when a result is clicked for a contact whose emails are not loaded
     // yet; the scroll happens once they arrive.
     const [pendingScrollId, setPendingScrollId] = useState<number | null>(null);
@@ -859,7 +60,9 @@ export default function OutreachPage() {
     const [showSendModal, setShowSendModal] = useState(false);
     const [sendingEmails, setSendingEmails] = useState(false);
     const [pendingCount, setPendingCount] = useState<number | null>(null);
-    const [sendResult, setSendResult] = useState<{ sent: number; failed: number; errors: string[] } | null>(null);
+    const [sendResult, setSendResult] = useState<SendResult | null>(null);
+
+    const search = useEmailSearch(apiFetch);
 
     // Last revision the currently held data was read against, and when the last
     // unconditional refetch happened. Refs, not state: the poll reads them
@@ -874,15 +77,13 @@ export default function OutreachPage() {
     const selectedContact = contacts.find(c => c.id === selectedId) ?? null;
     const orgName = config?.orgName || 'Mistflame';
     const sendAddrs = config?.sendAddrs ?? [];
-    const searchTrimmed = searchQuery.trim();
-    const searchActive = searchTrimmed.length >= MIN_SEARCH_CHARS;
     const filteredContacts = contacts.filter(c => {
         if (filterAwaiting && !c.awaiting_reply) return false;
-        if (!searchTrimmed) return true;
+        if (!search.trimmed) return true;
         return (
-            fuzzyMatch(searchTrimmed, c.name) ||
-            fuzzyMatch(searchTrimmed, c.email) ||
-            c.tags.some(t => fuzzyMatch(searchTrimmed, t.name))
+            fuzzyMatch(search.trimmed, c.name) ||
+            fuzzyMatch(search.trimmed, c.email) ||
+            c.tags.some(t => fuzzyMatch(search.trimmed, t.name))
         );
     });
 
@@ -931,6 +132,25 @@ export default function OutreachPage() {
         apiFetch('/api/revision')
             .then(r => json<{ revision?: number | null }>(r))
             .then(data => data.revision ?? null);
+
+    const refreshContacts = () => {
+        apiFetch('/api/contacts')
+            .then(r => json<{ contacts?: Contact[] }>(r))
+            .then(data => {
+                setContacts(prev => {
+                    const next = data.contacts ?? [];
+                    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
+                });
+            })
+            .catch(() => {}); // keep existing contacts on error
+    };
+
+    const refreshPendingCount = () => {
+        apiFetch('/api/send-emails')
+            .then(r => json<{ count?: number }>(r))
+            .then(data => setPendingCount(data.count ?? 0))
+            .catch(() => {});
+    };
 
     useEffect(() => {
         apiFetch('/api/config')
@@ -994,13 +214,6 @@ export default function OutreachPage() {
         else localStorage.setItem('mf_contact', String(selectedId));
     }, [selectedId]);
 
-    const clearSearchResults = () => {
-        setSearchResults([]);
-        setSearchTruncated(false);
-        setSearchUnavailable(false);
-        setSearchLoading(false);
-    };
-
     const scrollToEmail = (id: number) => {
         const el = document.getElementById(`email-${id}`);
         if (!el) return false;
@@ -1008,34 +221,6 @@ export default function OutreachPage() {
         setHighlightId(id);
         return true;
     };
-
-    // Message search. Contacts are filtered client-side from data already held;
-    // only this half needs the server, so a short query does nothing and the
-    // rest is debounced. Clearing on a too-short query happens in the input's
-    // onChange, so that this effect never sets state synchronously.
-    useEffect(() => {
-        if (searchTrimmed.length < MIN_SEARCH_CHARS) return;
-        let cancelled = false;
-        const timer = setTimeout(() => {
-            setSearchLoading(true);
-            apiFetch(`/api/search?q=${encodeURIComponent(searchTrimmed)}`)
-                .then(async res => {
-                    if (cancelled) return;
-                    if (res.status === 503) {
-                        setSearchUnavailable(true);
-                        setSearchResults([]);
-                        return;
-                    }
-                    const data = await res.json() as { results?: SearchResult[]; truncated?: boolean };
-                    setSearchUnavailable(false);
-                    setSearchResults(data.results ?? []);
-                    setSearchTruncated(!!data.truncated);
-                })
-                .catch(() => { if (!cancelled) setSearchResults([]); })
-                .finally(() => { if (!cancelled) setSearchLoading(false); });
-        }, SEARCH_DEBOUNCE_MS);
-        return () => { cancelled = true; clearTimeout(timer); };
-    }, [searchTrimmed]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // A result for another contact switches to it first; the card only exists
     // once that contact's emails have loaded. rAF because the scroll wants the
@@ -1079,6 +264,22 @@ export default function OutreachPage() {
         return true;
     };
 
+    const startAddContact = () => {
+        if (addingContact && (addContactForm.name || addContactForm.email || addContactForm.description) && !confirm('Discard new contact?')) return;
+        if (editContact && !confirm('Discard unsaved changes?')) return;
+        if ((addingEmail || replyToEmail) && !confirm('Discard unsaved email?')) return;
+        if (editingEmailId !== null && !confirm('Discard unsaved email edits?')) return;
+        setAddingContact(true);
+        setSelectedId(null);
+        setEditContact(null);
+        setAddContactForm({});
+        setContactSaveError(null);
+        setAddingEmail(false);
+        setReplyToEmail(null);
+        setEditingEmailId(null);
+        setApiError(null);
+    };
+
     const openSearchResult = (result: SearchResult) => {
         if (result.contact_id === selectedId) {
             scrollToEmail(result.id);
@@ -1093,25 +294,6 @@ export default function OutreachPage() {
     const logout = async () => {
         await fetch('/api/auth', { method: 'DELETE' });
         router.push('/login');
-    };
-
-    const refreshContacts = () => {
-        apiFetch('/api/contacts')
-            .then(r => json<{ contacts?: Contact[] }>(r))
-            .then(data => {
-                setContacts(prev => {
-                    const next = data.contacts ?? [];
-                    return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
-                });
-            })
-            .catch(() => {}); // keep existing contacts on error
-    };
-
-    const refreshPendingCount = () => {
-        apiFetch('/api/send-emails')
-            .then(r => json<{ count?: number }>(r))
-            .then(data => setPendingCount(data.count ?? 0))
-            .catch(() => {});
     };
 
     const openSendModal = () => {
@@ -1376,163 +558,26 @@ export default function OutreachPage() {
             </header>
 
             <div className="flex flex-1 min-h-0">
-                {/* Sidebar */}
-                <aside className="w-72 flex-shrink-0 border-r border-white/20 flex flex-col min-h-0">
-                    <div className="flex-shrink-0 flex items-center gap-2 px-4 h-11 border-b border-white/20">
-                        <span className="text-xs text-white/65 uppercase tracking-wider font-sans">Contacts</span>
-                        {!loadingContacts && contacts.length > 0 && (
-                            <div className="flex items-center gap-1 text-xs text-white/40 font-sans">
-                                <span className="text-white/30">—</span>
-                                <span>{contacts.length}</span>
-                                {contacts.filter(c => c.awaiting_reply).length > 0 && (
-                                    <span className="flex items-center">
-                                        ({' '}<span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />{' '}{contacts.filter(c => c.awaiting_reply).length}{' '})
-                                    </span>
-                                )}
-                            </div>
-                        )}
-                        <span className="flex-1" />
-                        <button
-                            onClick={() => {
-                            if (addingContact && (addContactForm.name || addContactForm.email || addContactForm.description) && !confirm('Discard new contact?')) return;
-                            if (editContact && !confirm('Discard unsaved changes?')) return;
-                            if ((addingEmail || replyToEmail) && !confirm('Discard unsaved email?')) return;
-                            if (editingEmailId !== null && !confirm('Discard unsaved email edits?')) return;
-                            setAddingContact(true);
-                            setSelectedId(null);
-                            setEditContact(null);
-                            setAddContactForm({});
-                            setContactSaveError(null);
-                            setAddingEmail(false);
-                            setReplyToEmail(null);
-                            setEditingEmailId(null);
-                            setApiError(null);
-                        }}
-                            className="text-sm text-[#ffd54f]/60 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans"
-                        >
-                            + New
-                        </button>
-                    </div>
-                    <div className="flex-shrink-0 flex items-center gap-2 px-4 h-11 border-b border-white/20">
-                        <svg className="text-white/35 shrink-0" width="13" height="13" viewBox="0 0 15 15" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <circle cx="6" cy="6" r="4.25" stroke="currentColor" strokeWidth="1.5"/>
-                            <line x1="9.5" y1="9.5" x2="13" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                        </svg>
-                        <input
-                            className="flex-1 bg-transparent text-white text-xs font-sans focus:outline-none placeholder:text-white/30"
-                            placeholder="Search contacts and mail…"
-                            value={searchQuery}
-                            onChange={e => {
-                                setSearchQuery(e.target.value);
-                                if (e.target.value.trim().length < MIN_SEARCH_CHARS) clearSearchResults();
-                            }}
-                        />
-                        {searchQuery && (
-                            <button
-                                onClick={() => { setSearchQuery(''); clearSearchResults(); }}
-                                className="text-white/35 hover:text-white/70 transition-colors cursor-pointer font-sans text-xs"
-                            >
-                                ✕
-                            </button>
-                        )}
-                        <button
-                            onClick={() => setFilterAwaiting(v => !v)}
-                            title="Show only contacts awaiting reply"
-                            className={`flex items-center justify-center w-6 h-6 border transition-colors cursor-pointer ${filterAwaiting ? 'border-[#ffd54f]/50 text-[#ffd54f]' : 'border-white/15 text-white/35 hover:text-white/60 hover:border-white/30'}`}
-                        >
-                            <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
-                        </button>
-                    </div>
-                    <div className="flex-1 overflow-y-auto">
-                        {loadingContacts && (
-                            <p className="text-sm text-white/55 text-center py-8 font-sans">Loading…</p>
-                        )}
-                        {!loadingContacts && contactsError && (
-                            <div className="text-center py-8 flex flex-col items-center gap-3">
-                                <p className="text-sm text-white/55 font-sans">Failed to load contacts</p>
-                                <button onClick={fetchContacts} className="text-xs font-sans text-white/50 hover:text-white/80 transition-colors">Retry</button>
-                            </div>
-                        )}
-                        {!loadingContacts && !contactsError && contacts.length === 0 && (
-                            <p className="text-sm text-white/55 text-center py-8 font-sans">No contacts yet</p>
-                        )}
-                        {!loadingContacts && contacts.length > 0 && filteredContacts.length === 0 && !searchActive && (
-                            <p className="text-sm text-white/55 text-center py-8 font-sans">No matches</p>
-                        )}
-                        {searchActive && !loadingContacts && contacts.length > 0 && (
-                            <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-white/40 font-sans border-b border-white/10">
-                                Contacts {filteredContacts.length > 0 && `· ${filteredContacts.length}`}
-                            </div>
-                        )}
-                        {searchActive && filteredContacts.length === 0 && (
-                            <p className="text-xs text-white/40 px-4 py-3 font-sans">No matching contacts</p>
-                        )}
-                        {filteredContacts.map(c => (
-                            <button
-                                key={c.id}
-                                onClick={() => selectContact(c.id)}
-                                className={`w-full text-left px-4 py-3.5 border-b border-white/10 transition-colors hover:bg-white/[0.07] cursor-pointer ${selectedId === c.id ? 'bg-white/[0.08] border-l-2 border-l-[#ffd54f] pl-[14px]' : ''}`}
-                            >
-                                <div className="flex items-center gap-2">
-                                    <div className="text-sm font-semibold text-white truncate font-sans">{c.name}</div>
-                                    {!!c.awaiting_reply && <span className="w-1.5 h-1.5 rounded-full bg-[#ffd54f] shrink-0" />}
-                                </div>
-                                <div className="text-xs text-white/60 truncate mt-0.5 font-sans">{c.email}</div>
-                                {c.tags.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5 mt-2">
-                                        {c.tags.map(t => <TagChip key={t.id} tag={t} />)}
-                                    </div>
-                                )}
-                            </button>
-                        ))}
-
-                        {searchActive && (
-                            <>
-                                <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-white/40 font-sans border-y border-white/10 flex items-center gap-1.5">
-                                    <span>Messages</span>
-                                    {searchResults.length > 0 && (
-                                        <span>· {searchResults.length}{searchTruncated ? '+' : ''}</span>
-                                    )}
-                                    {searchLoading && <span className="text-white/25 normal-case tracking-normal">searching…</span>}
-                                </div>
-                                {searchUnavailable && (
-                                    <p className="text-xs text-white/40 px-4 py-3 font-sans">
-                                        Search index not installed. Apply
-                                        {' '}<span className="text-white/55">db/migrations/004-email-fts.sql</span>.
-                                    </p>
-                                )}
-                                {!searchUnavailable && !searchLoading && searchResults.length === 0 && (
-                                    <p className="text-xs text-white/40 px-4 py-3 font-sans">No matching messages</p>
-                                )}
-                                {searchResults.map(r => (
-                                    <button
-                                        key={r.id}
-                                        onClick={() => openSearchResult(r)}
-                                        className="w-full text-left px-4 py-3 border-b border-white/10 transition-colors hover:bg-white/[0.07] cursor-pointer"
-                                    >
-                                        <div className="flex items-baseline justify-between gap-2">
-                                            <span className="text-xs text-white/70 truncate font-sans">{r.contact_name}</span>
-                                            <span className="text-[10px] text-white/35 font-sans shrink-0">
-                                                {r.sent_at ? formatDate(r.sent_at).split(',')[0] : 'draft'}
-                                            </span>
-                                        </div>
-                                        <div className="text-xs text-white/90 truncate mt-0.5 font-sans">
-                                            {r.subject || '(no subject)'}
-                                        </div>
-                                        <div className="text-[11px] text-white/45 mt-1 font-sans line-clamp-2 whitespace-pre-wrap break-words">
-                                            <SnippetText snippet={r.snippet} />
-                                        </div>
-                                    </button>
-                                ))}
-                                {searchTruncated && (
-                                    <p className="text-[11px] text-white/35 px-4 py-2 font-sans">
-                                        Showing the first {searchResults.length}; narrow the search for more.
-                                    </p>
-                                )}
-                            </>
-                        )}
-                    </div>
-                </aside>
+                <ContactSidebar
+                    loading={loadingContacts}
+                    error={contactsError}
+                    contacts={contacts}
+                    filteredContacts={filteredContacts}
+                    selectedId={selectedId}
+                    searchQuery={search.query}
+                    searchActive={search.active}
+                    filterAwaiting={filterAwaiting}
+                    searchResults={search.results}
+                    searchTruncated={search.truncated}
+                    searchLoading={search.loading}
+                    searchUnavailable={search.unavailable}
+                    onSearchChange={search.setQuery}
+                    onToggleAwaiting={() => setFilterAwaiting(v => !v)}
+                    onSelectContact={selectContact}
+                    onOpenResult={openSearchResult}
+                    onNewContact={startAddContact}
+                    onRetry={fetchContacts}
+                />
 
                 {/* Main area */}
                 <main className="flex-1 overflow-y-auto p-6 min-w-0">
@@ -1706,58 +751,14 @@ export default function OutreachPage() {
                 </main>
             </div>
 
-            {/* Send emails modal */}
             {showSendModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-                    <div className="bg-[#111] border border-white/15 p-6 w-full max-w-md mx-4 flex flex-col gap-5">
-                        <div>
-                            <h2 className="font-heading-bold text-lg tracking-wide text-white mb-1">Send all emails</h2>
-                            <p className="text-sm text-white/55 font-sans">
-                                {sendResult
-                                    ? null
-                                    : pendingCount === null
-                                        ? 'Counting pending emails…'
-                                        : pendingCount === 0
-                                            ? 'No pending emails to send.'
-                                            : `${pendingCount} unsent ${pendingCount === 1 ? 'email' : 'emails'} will be sent.`}
-                            </p>
-                        </div>
-
-                        {!sendResult && (
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={sendEmails}
-                                    disabled={sendingEmails || pendingCount === 0}
-                                    className={btnPrimary}
-                                >
-                                    {sendingEmails ? 'Sending…' : 'Send'}
-                                </button>
-                                <button onClick={() => setShowSendModal(false)} className={btnGhost} disabled={sendingEmails}>
-                                    Cancel
-                                </button>
-                            </div>
-                        )}
-
-                        {sendResult && (
-                            <>
-                                <div className="flex flex-col gap-1.5">
-                                    <p className="text-sm font-sans">
-                                        <span className="text-white/85">{sendResult.sent} sent</span>
-                                        {sendResult.failed > 0 && (
-                                            <span className="text-red-400 ml-3">{sendResult.failed} failed</span>
-                                        )}
-                                    </p>
-                                    {sendResult.errors.length > 0 && (
-                                        <ul className="text-xs text-red-400/80 font-sans mt-1 flex flex-col gap-0.5">
-                                            {sendResult.errors.map((e, i) => <li key={i}>{e}</li>)}
-                                        </ul>
-                                    )}
-                                </div>
-                                <button onClick={() => setShowSendModal(false)} className={btnPrimary}>Close</button>
-                            </>
-                        )}
-                    </div>
-                </div>
+                <SendModal
+                    pendingCount={pendingCount}
+                    sending={sendingEmails}
+                    result={sendResult}
+                    onSend={sendEmails}
+                    onClose={() => setShowSendModal(false)}
+                />
             )}
         </div>
     );
