@@ -32,7 +32,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 |---|---|
 | `ORG_NAME` | Organisation/project name; shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email From: headers; defaults to empty |
 | `SEND_ADDRS` | Comma-separated list of available sender addresses |
-| `SESSION_TTL_HOURS` | KV TTL for the active-session marker and for the auth token when "Remember me" is unchecked (default `24`); does not control cookie Max-Age |
+| `SESSION_TTL_HOURS` | KV TTL for the auth token when "Remember me" is unchecked (default `24`); does not control cookie Max-Age |
 | `REMEMBER_TTL_DAYS` | KV TTL and cookie Max-Age for the auth token when "Remember me" is checked (default `30`) |
 | `PASSWORD` | Login password (secret) |
 
@@ -48,7 +48,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 | Binding | Type | Worker | Purpose |
 |---|---|---|---|
 | `DB` | D1 Database | both | Contacts and email history |
-| `SESSION` | KV Namespace | main | Active session marker and auth tokens |
+| `SESSION` | KV Namespace | main | Auth tokens (one `remember:<token>` key per active session) |
 | `ATTACHMENTS` | R2 Bucket | both | Email attachments, including inline (`cid:`) parts of HTML bodies |
 | `EMAIL_SENDER` | Send Email | both | Outbound email via Cloudflare Email Workers |
 | `KV` | KV Namespace | email-receiver | Rate limit counters (can share the `SESSION` namespace) |
@@ -109,7 +109,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 - The POST and PATCH endpoints for emails reject `sender: null`; null senders are only written by the email receiver worker directly via D1, not via the API.
 - **Replying to an HTML email preserves the HTML quote chain.** The composed reply is always plain text (the composer is a textarea), but when the parent has a `body_html`, `send-emails/route.ts` also builds an HTML rendition: our words escaped with `<br>` line breaks, the attribution line, then the parent's own markup nested in a `<blockquote>`. The message goes out as `multipart/alternative`, nested inside `multipart/mixed` when there are attachments. A thread that started as plain text stays plain text throughout.
 - The HTML part is base64-encoded so non-ASCII survives regardless of the receiving server's 8BITMIME support; the text part stays readable in the raw message and declares `Content-Transfer-Encoding: 8bit`. Headers that may carry non-ASCII (Subject and the From/To display names) are RFC 2047-encoded by `encodeHeaderText` in `src/lib/mime.ts`; the receiver uses the same function for notification subjects.
-- **The generated HTML is sent but deliberately not stored.** Nothing needs it: our own messages display as plain text (see "HTML email rendering"), and a reply always parents an inbound email because the `+ Reply` button only appears on those, so the HTML a reply nests is always the contact's and never ours. Keeping it out of the row also keeps the post-send `UPDATE` small; that statement runs *after* the send, so a row grown too large to write would leave the message unmarked and resend it next time.
+- **The generated HTML is sent but deliberately not stored.** Nothing needs it: our own messages display as plain text (see "HTML email rendering"), and a reply always parents an inbound email because the `+ Reply` button only appears on those, so the HTML a reply nests is always the contact's and never ours. Keeping it out of the row also keeps the post-send body rewrite small; if that `UPDATE` fails the row stays marked sent (the claim wrote `sent_at` before the send, see "CC delivery"), just without the quote appended to its stored body.
 - `quotableHtml` strips three things from the parent fragment before nesting it. `<style>`, because a quoted `body { display: none }` would apply to our whole outgoing message and hide our own reply in the recipient's client. `<script>`, which cannot reach `body_html` through `htmlToFragment` but is removed so no other path could pass one on. And `cid:` images, whose Content-ID belongs to the message we received rather than the one we are sending, so every one left in would be a guaranteed broken image for the recipient; a full client re-attaches those parts as `multipart/related`, which is not worth the extra R2 reads and MIME nesting to show someone their own logo in their own quote.
 
 ## Email data model
@@ -214,26 +214,15 @@ Do not tighten `script-src` to remove `'unsafe-inline'` without first implementi
 ## Authentication
 
 ### Login (`POST /api/auth`)
-On successful password check, a `crypto.randomUUID()` token is generated. Two KV keys are written, both with the same TTL:
+On successful password check, a `crypto.randomUUID()` token is generated and one KV key is written: `remember:<token>` (empty value), which middleware looks up on every request. Each login gets its own independent token, so **any number of sessions can be active simultaneously**; logging in never touches anyone else's token. There used to be a `session` marker key enforcing a single active session (with a 409 overlap check and a "Log in anyway" displacement flow); it was removed when the app went multi-session. Stale `session` keys in existing KV namespaces expire on their own TTL and are ignored.
 
-| KV key | Value | Purpose |
-|---|---|---|
-| `session` | the token | Tracks the current session; used for the overlap check and displacement |
-| `remember:<token>` | `""` (empty) | Auth token; middleware looks this up on every request |
-
-The `__remember` cookie (HttpOnly, SameSite=Strict) holds the token. When "Remember me" is unchecked, the cookie has no Max-Age (browser-session cookie) and both KV keys use `SESSION_TTL_HOURS`. When checked, the cookie gets a Max-Age and both KV keys use `REMEMBER_TTL_DAYS`.
+The `__remember` cookie (HttpOnly, SameSite=Strict) holds the token. When "Remember me" is unchecked, the cookie has no Max-Age (browser-session cookie) and the KV key uses `SESSION_TTL_HOURS`. When checked, the cookie gets a Max-Age and the KV key uses `REMEMBER_TTL_DAYS`.
 
 ### Middleware auth check
-Middleware reads `__remember` from the request, looks up `remember:<cookieValue>` in KV. If found → authenticated. If not → redirect to `/login` (or 401 for API routes). Visiting `/login` with a valid cookie redirects straight to `/`. One KV read per request, no session-creation side effects.
-
-### Session overlap check (409)
-Before writing a new token, the server reads the existing `session` key. If a token is found, it verifies that `remember:<token>` still exists in KV. Only if both are present does it return 409 ("Another session is currently active"). A stale `session` marker whose auth token has expired is silently ignored — login proceeds without a prompt.
-
-### Forced login (displacement)
-When the user clicks "Log in anyway" (`force: true`), the old token is read from `session` and `remember:<oldToken>` is deleted from KV before the new token is written. The displaced user's cookie stops working on their next request.
+Middleware reads `__remember` from the request, looks up `remember:<cookieValue>` in KV. If found → authenticated. If not → redirect to `/login` (or 401 for API routes). Visiting `/login` with a valid cookie redirects straight to `/`. One KV read per request, no session-creation side effects. KV is eventually consistent across edge locations, so a token created at one location can take up to a minute to become visible at another; the worst case is one spurious redirect to `/login` shortly after logging in from elsewhere.
 
 ### Logout (`DELETE /api/auth`)
-Deletes `remember:<token>` from KV, and the `session` marker only when it still holds the caller's own token: a displaced session logging out must not erase the marker of the session that displaced it, which would silently disable the overlap warning. The `__remember` cookie is cleared either way.
+Deletes `remember:<token>` from KV (only the caller's own session) and clears the `__remember` cookie. There is no "log out everywhere"; other sessions' tokens expire on their TTL.
 
 ### Dev mode
 When `DEV_MODE` is set, a hardcoded token (`dev-remember-token`) is used. KV is not read or written. The `Secure` flag is omitted from the cookie.
@@ -273,7 +262,7 @@ All API `fetch` calls go through the `apiFetch` wrapper (defined inside `Outreac
 ## CC delivery
 Outgoing CC addresses are stored as a comma-separated string in the `cc` column and validated in the email POST and PATCH handlers, so an invalid address is rejected at composition rather than surfacing at send time. At send time (`send-emails/route.ts`), the raw email is delivered separately to each CC address (one `EMAIL_SENDER.send()` call per address) rather than relying on the SMTP `Cc:` header for delivery. The `Cc:` header is still included in each copy for recipient visibility.
 
-The row is marked sent **immediately after the contact's copy is delivered**, before the CC copies go out. A failed CC copy is reported in the send result's `errors` but never leaves the row unsent, because an unsent row is retried and a retry would deliver the message to the contact a second time.
+The row is marked sent **before the contact's copy is delivered**, as a concurrency claim: `UPDATE email SET sent_at = ?, message_id = ? WHERE id = ? AND sent_at IS NULL`, and the send is skipped when `meta.changes` is 0 because another request claimed the row first. With multiple simultaneous sessions, two users clicking Send on the same draft would otherwise both read it as pending and both deliver it. A failed send releases the claim (sets `sent_at` and `message_id` back to NULL) so the retry behaviour is unchanged; once the contact's copy has gone out, nothing releases it, because a CC failure or a failed post-send body rewrite must not cause the contact's copy to be delivered twice. The residual risk is a crash between claim and send leaving the row marked sent but undelivered, which is the right way round to be wrong. A failed CC copy is reported in the send result's `errors`.
 
 ## Styling
 - Tailwind CSS 4 with `shadcn/ui` and `tw-animate-css`.

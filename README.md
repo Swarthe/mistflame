@@ -49,7 +49,8 @@ Email Workers (send and receive).
   inbound rate limit (`RATE_LIMIT_MAX`)
 
 **Access**
-- Single user, one active session at a time, with an optional "Remember me"
+- Password-protected, any number of simultaneous sessions, with an optional
+  "Remember me"
 
 See [Security](#security) for how HTML email, remote images and authentication
 are handled.
@@ -140,7 +141,7 @@ changes needed to customise the app for a new deployment.
 |---|---|---|
 | `ORG_NAME` | `""` | Organisation/project name; when set, shown in the UI as "Mistflame - {ORG_NAME}" and used as the display name in email `From:` headers; leave empty to show "Mistflame" only |
 | `SEND_ADDRS` | `"hello@example.com"` | Comma-separated list of sender addresses available in the UI |
-| `SESSION_TTL_HOURS` | `"24"` | KV TTL for the session marker and for the auth token when "Remember me" is unchecked |
+| `SESSION_TTL_HOURS` | `"24"` | KV TTL for the auth token when "Remember me" is unchecked |
 | `REMEMBER_TTL_DAYS` | `"30"` | KV TTL and cookie lifespan for the auth token when "Remember me" is checked |
 
 ### Email receiver worker (`email-receiver/wrangler.toml`)
@@ -156,7 +157,7 @@ changes needed to customise the app for a new deployment.
 | Binding | Type | Purpose |
 |---|---|---|
 | `DB` | D1 Database | Contacts and email history |
-| `SESSION` | KV Namespace | Active session marker and auth tokens |
+| `SESSION` | KV Namespace | Auth tokens, one per active session |
 | `ATTACHMENTS` | R2 Bucket | Email attachments, including inline (`cid:`) images from HTML bodies |
 | `EMAIL_SENDER` | Send Email | Outbound email via Cloudflare Email Workers |
 | `KV` | KV Namespace | Rate limit counters (email receiver only; can share the `SESSION` namespace) |
@@ -232,8 +233,9 @@ npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD C
 ## Security
 
 - **Authentication**: a single password, compared in constant time so a wrong
-  guess cannot be distinguished by timing. One active session at a time; logging
-  in elsewhere prompts before displacing the existing one.
+  guess cannot be distinguished by timing. Each login gets its own session
+  token, so any number of sessions can be active at once; logging out ends
+  only your own.
 - **HTML email**: inbound HTML is sanitised with DOMPurify and rendered in a
   sandboxed iframe with scripts disabled, so a sender's markup and stylesheet
   apply to their message and cannot reach the rest of the app.
@@ -319,8 +321,8 @@ currently implemented.
 - **Email templates / LLM integration**: no reusable draft templates or LLM
   support for reply generation
 - **Scheduled sending**: no support for sending emails at a scheduled time
-- **Multi-user access**: single-user only by design; no role-based access or
-  shared sessions
+- **User accounts**: no per-user accounts or roles; everyone shares one
+  password and sees the same data
 - **Push updates**: new mail appears through polling rather than a push, so it
   can take up to five seconds to show. The poll itself is cheap (see Notes), but
   there is no WebSocket or SSE channel

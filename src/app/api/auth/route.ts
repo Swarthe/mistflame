@@ -1,12 +1,10 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 
 const REMEMBER_COOKIE = '__remember';
-const SESSION_KEY = 'session';
 
 export async function POST(request: Request) {
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const password = body?.password;
-    const force = body?.force === true;
     const remember = body?.remember === true;
 
     if (typeof password !== 'string') {
@@ -38,23 +36,9 @@ export async function POST(request: Request) {
         cookieMaxAge = `; Max-Age=${kvTtl}`;
     }
 
+    // Each login gets its own token, so any number of sessions can be
+    // active at once; logging in never affects anyone else's token.
     if (!env.DEV_MODE) {
-        if (!force) {
-            const existingToken = await env.SESSION.get(SESSION_KEY);
-            if (existingToken) {
-                const stillValid = await env.SESSION.get(`remember:${existingToken}`);
-                if (stillValid !== null) {
-                    return Response.json({ ok: false, activeSession: true }, { status: 409 });
-                }
-            }
-        } else {
-            const oldToken = await env.SESSION.get(SESSION_KEY);
-            if (oldToken) {
-                await env.SESSION.delete(`remember:${oldToken}`);
-            }
-        }
-
-        await env.SESSION.put(SESSION_KEY, token, { expirationTtl: kvTtl });
         await env.SESSION.put(`remember:${token}`, '', { expirationTtl: kvTtl });
     }
 
@@ -72,14 +56,6 @@ export async function DELETE(request: Request) {
             const rememberMatch = cookieHeader.match(new RegExp(`${REMEMBER_COOKIE}=([^;]+)`));
             if (rememberMatch) {
                 await env.SESSION.delete(`remember:${rememberMatch[1]}`);
-                // The active-session marker is only cleared when it is ours: a
-                // displaced session logging out must not erase the marker of
-                // the session that displaced it, which would silently disable
-                // the overlap warning for the next login.
-                const current = await env.SESSION.get(SESSION_KEY);
-                if (current === rememberMatch[1]) {
-                    await env.SESSION.delete(SESSION_KEY);
-                }
             }
         }
     } catch {

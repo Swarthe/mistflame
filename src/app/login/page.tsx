@@ -9,29 +9,25 @@ export default function LoginPage() {
     const [remember, setRemember] = useState(false);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    const [activeSession, setActiveSession] = useState(false);
     const [orgName, setOrgName] = useState('');
     useEffect(() => {
         fetch('/api/config').then(r => r.json()).then((d: unknown) => setOrgName(((d as { orgName?: string }).orgName) ?? ''));
     }, []);
 
-    const submit = async (force = false) => {
+    const submit = async () => {
         setLoading(true);
         setError('');
         try {
             const res = await fetch('/api/auth', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password, force, remember }),
+                body: JSON.stringify({ password, remember }),
             });
-            const data = (await res.json()) as { ok: boolean; activeSession?: boolean; error?: string };
+            const data = (await res.json()) as { ok: boolean; error?: string };
             if (res.ok) {
                 router.replace('/');
-            } else if (data.activeSession) {
-                setActiveSession(true);
             } else {
                 setError(data.error ?? 'Incorrect password.');
-                setActiveSession(false);
             }
         } finally {
             setLoading(false);
@@ -48,8 +44,7 @@ export default function LoginPage() {
                     </h1>
                 </div>
 
-                {!activeSession ? (
-                    <form onSubmit={e => { e.preventDefault(); submit(false); }} className="flex flex-col gap-4">
+                <form onSubmit={e => { e.preventDefault(); submit(); }} className="flex flex-col gap-4">
                         <input
                             type="password"
                             value={password}
@@ -80,29 +75,6 @@ export default function LoginPage() {
                             {error && <p className="font-sans text-xs text-red-400">{error}</p>}
                         </div>
                     </form>
-                ) : (
-                    <div className="flex flex-col gap-4 mb-8">
-                        <div className="border border-[#ffd54f]/30 bg-[#ffd54f]/[0.05] px-4 py-3">
-                            <p className="font-sans text-sm text-white/80 leading-relaxed">
-                                Another session is currently active. Logging in will disconnect them and may disrupt ongoing work.
-                            </p>
-                        </div>
-                        <button
-                            onClick={() => submit(true)}
-                            disabled={loading}
-                            className="bg-white/80 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                        >
-                            {loading ? 'Logging in…' : 'Log in anyway'}
-                        </button>
-                        <button
-                            onClick={() => { setActiveSession(false); setError(''); }}
-                            disabled={loading}
-                            className="font-sans text-sm text-white/50 hover:text-white/80 transition-colors cursor-pointer"
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                )}
                 <a
                     href="https://github.com/Swarthe/mistflame"
                     target="_blank"

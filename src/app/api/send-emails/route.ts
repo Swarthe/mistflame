@@ -251,9 +251,32 @@ export async function POST(request: Request) {
             failed++;
             continue;
         }
+        // Set once the row is claimed (sent_at written) and once the contact's
+        // copy has actually gone out; the catch block uses them to decide
+        // whether releasing the claim is safe.
+        let claimed = false;
+        let delivered = false;
         try {
             const fromDomain = from.split('@')[1] ?? 'example.com';
             const msgId = generateMessageId(fromDomain);
+
+            // Claim the row before sending, so two requests handling the same
+            // pending draft cannot both deliver it: the conditional UPDATE is
+            // atomic, and whichever request matches zero rows backs off. A
+            // failed send releases the claim below, so the retry behaviour is
+            // unchanged; the residual risk is a crash between here and the
+            // send, which leaves the row marked sent but undelivered. That is
+            // the right way round to be wrong: with concurrent users, the
+            // double send is the likelier and the worse failure.
+            const claim = await env.DB
+                .prepare('UPDATE email SET sent_at = ?, message_id = ? WHERE id = ? AND sent_at IS NULL')
+                .bind(sentAt, msgId, email.id)
+                .run();
+            if (!claim.meta.changes) {
+                continue;
+            }
+            claimed = true;
+
             const safeName = email.contact_name.replace(/[<>\\\r\n]/g, '');
             const safeSubject = (email.subject ?? '(no subject)').replace(/[\r\n]/g, ' ');
             let bodyNormalised = email.body.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
@@ -318,29 +341,22 @@ export async function POST(request: Request) {
 
             const raw = buildRaw(headerLines, bodyNormalised, htmlBody, attachmentData);
             await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, email.contact_email, raw));
+            delivered = true;
 
-            // The row is marked sent as soon as the contact has the message,
-            // before the CC copies go out: a CC failure after this point is
-            // reported but must not leave the row unsent, or the next attempt
-            // would deliver the same message to the contact a second time.
+            // The row was already marked sent by the claim above; only a reply
+            // still needs its stored body rewritten with the quote appended.
+            // The plain-text rendition is stored; the generated HTML
+            // deliberately is not. Nothing needs it: our own messages display
+            // as plain text, and a reply always parents an inbound email (the
+            // + Reply button only appears on those), so the HTML a reply nests
+            // is always the contact's, never ours. If this UPDATE fails the
+            // row stays sent, with the composed body but without the quote; a
+            // CC failure after this point likewise must not unsend the row,
+            // or the next attempt would deliver the contact's copy twice.
             if (bodyForStorage !== null) {
-                // The plain-text rendition with the quote appended is stored; the
-                // generated HTML deliberately is not. Nothing needs it: our own
-                // messages display as plain text, and a reply always parents an
-                // inbound email (the + Reply button only appears on those), so the
-                // HTML a reply nests is always the contact's, never ours.
-                //
-                // Not storing it also keeps this UPDATE small. It runs *after* the
-                // send, so a row that had grown too large to write would leave the
-                // message unmarked and resend it on the next attempt.
                 await env.DB
-                    .prepare('UPDATE email SET sent_at = ?, message_id = ?, body = ? WHERE id = ?')
-                    .bind(sentAt, msgId, bodyForStorage, email.id)
-                    .run();
-            } else {
-                await env.DB
-                    .prepare('UPDATE email SET sent_at = ?, message_id = ? WHERE id = ?')
-                    .bind(sentAt, msgId, email.id)
+                    .prepare('UPDATE email SET body = ? WHERE id = ?')
+                    .bind(bodyForStorage, email.id)
                     .run();
             }
 
@@ -358,6 +374,21 @@ export async function POST(request: Request) {
                 }
             }
         } catch (err) {
+            // Release the claim only when the contact's copy never went out;
+            // once delivered, the row must stay sent whatever failed after
+            // (the body rewrite), or a retry would deliver it again. If the
+            // release itself fails the row stays claimed, which errs on the
+            // side of not sending twice.
+            if (claimed && !delivered) {
+                try {
+                    await env.DB
+                        .prepare('UPDATE email SET sent_at = NULL, message_id = NULL WHERE id = ?')
+                        .bind(email.id)
+                        .run();
+                } catch {
+                    // reported below either way
+                }
+            }
             const msg = err instanceof Error ? err.message : String(err);
             errors.push(`${email.contact_name}: ${msg}`);
             failed++;
