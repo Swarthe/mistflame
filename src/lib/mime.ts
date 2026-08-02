@@ -31,6 +31,25 @@ function toBase64(bytes: Uint8Array): string {
  * The caller is still responsible for stripping CR/LF first; this encodes
  * text, it does not neutralise header injection.
  */
+/**
+ * RFC 5322 date-time for a Date: header. toUTCString already matches the
+ * required layout apart from the trailing "GMT", which RFC 5322 lists as an
+ * obsolete zone form that must not be generated; +0000 is the current one.
+ */
+export function rfc2822Date(date: Date): string {
+    return date.toUTCString().replace(/GMT$/, '+0000');
+}
+
+/**
+ * All message IDs in a header value, angle brackets stripped, in order.
+ * Used on In-Reply-To and References headers, which both hold one or more
+ * <id> blocks, possibly with surrounding comments or folding whitespace.
+ */
+export function extractMessageIds(value: string | null | undefined): string[] {
+    if (!value) return [];
+    return Array.from(value.matchAll(/<([^<>\s]+)>/g), m => m[1]);
+}
+
 export function encodeHeaderText(value: string): string {
     if (/^[\x20-\x7E]*$/.test(value)) return value;
     const chunks: string[] = [];

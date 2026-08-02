@@ -36,14 +36,17 @@ Email Workers (send and receive).
 - Compose plain-text drafts, editable until sent; send one at a time or all at
   once
 - Pick the sender address per email; CC and attachments supported
-- Replies are threaded and quote the message they answer, preserving its HTML
+- Replies are threaded and quote the message they answer, preserving its HTML,
+  and are delivered to the sender's `Reply-To` address when one is set
 - Requires the Cloudflare Workers Paid plan; receiving and reading work on the
   free tier
 
 **Receiving**
 - Inbound mail matched to contacts by sender address, with unknown senders added
   automatically
-- Threading via `In-Reply-To`, with a subject-line fallback
+- Threading via `In-Reply-To` and `References`, with a subject-line fallback
+- Delivery failures (bounces) are threaded onto the message that failed rather
+  than filed under a mailer-daemon contact
 - Remote images blocked until you ask for them, so tracking pixels do not fire
 - Optional notification email on arrival (`NOTIFY_ADDRS`) and a configurable
   inbound rate limit (`RATE_LIMIT_MAX`)
@@ -214,12 +217,13 @@ npx wrangler d1 execute mistflame-db --remote --file db/migrations/001-html-emai
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/002-indexes.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/003-revision.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/004-email-fts.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/005-reply-headers.sql
 ```
 
 002 to 004 use `IF NOT EXISTS` throughout and are safe to reapply, so an already
-current database is left alone. 001 is not: SQLite has no
-`ADD COLUMN IF NOT EXISTS`, so it errors rather than doing nothing. Check
-whether it is needed with
+current database is left alone. 001 and 005 are not: SQLite has no
+`ADD COLUMN IF NOT EXISTS`, so they error rather than doing nothing. Check
+whether they are needed with
 `npx wrangler d1 execute mistflame-db --remote --command "PRAGMA table_info(email)"`.
 
 Swap `--remote` for `--local` and the database name for the binding name `DB` to
@@ -326,6 +330,8 @@ currently implemented.
 - **Push updates**: new mail appears through polling rather than a push, so it
   can take up to five seconds to show. The poll itself is cheap (see Notes), but
   there is no WebSocket or SSE channel
+- **Forwarding / BCC / multiple recipients**: an email goes to one contact,
+  plus CC; there is no forward, BCC, or multi-recipient To
 
 ## Notes
 

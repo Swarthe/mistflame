@@ -18,9 +18,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                 SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
             )
             SELECT e.id, e.contact_id, e.parent_id, e.sender, e.sent_at, e.subject,
-                   e.body, e.body_html, e.message_id, e.recipient, e.cc, r.thread_id
+                   e.body, e.body_html, e.message_id, e.recipient, e.from_addr,
+                   e.cc, r.thread_id
             FROM email e JOIN ranked r ON e.id = r.id
-            ORDER BY e.sent_at ASC NULLS LAST
+            -- A batch send stamps every row with the same sent_at, so the id
+            -- tie-break keeps same-second messages in a stable order.
+            ORDER BY e.sent_at ASC NULLS LAST, e.id ASC
         `)
         .bind(contactId)
         .all<{ id: number; thread_id: number }>();
@@ -134,6 +137,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 // generated at send time when the parent has one.
                 body_html: null,
                 recipient: null,
+                from_addr: null,
                 cc,
             },
         }, { status: 201 });

@@ -192,7 +192,9 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
             {parentEmail && <ReplyPreview email={parentEmail} contactName={contactName} orgName={orgName} />}
             <div className="flex items-start justify-between gap-2">
                 <div className="flex items-baseline gap-2 min-w-0">
-                    <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? orgName : contactName}</span>
+                    {/* from_addr marks a third party writing into the contact's
+                        thread (a bounce), so name it rather than the contact. */}
+                    <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? orgName : email.from_addr ?? contactName}</span>
                     {isUs && email.sender && <span className="text-xs text-white/35 font-sans truncate">{email.sender}</span>}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
@@ -207,7 +209,9 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
                     {email.sent_at === null && (
                         <button className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans" onClick={() => setEditing(true)}>Edit</button>
                     )}
-                    {!isUs && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>}
+                    {/* No reply to a bounce: the composer would address the
+                        contact, not the reporting MTA the card names. */}
+                    {!isUs && !email.from_addr && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>}
                     <button className={btnDanger} onClick={onDelete} title="Delete email">✕</button>
                 </div>
             </div>

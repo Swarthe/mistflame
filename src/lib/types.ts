@@ -43,6 +43,9 @@ export interface EmailRecord {
     /** HTML alternative; null means body is the only rendition. */
     body_html: string | null;
     recipient: string | null;
+    /** Actual From address when the row was not written by the contact
+     *  themselves (bounces threaded onto the message that failed). */
+    from_addr: string | null;
     cc: string | null;
     attachments: Attachment[];
 }

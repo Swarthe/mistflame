@@ -1,5 +1,6 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import { encodeHeaderText } from '@/lib/mime';
+import { encodeHeaderText, extractMessageIds, rfc2822Date } from '@/lib/mime';
+import { isValidEmail } from '@/app/api/contacts/route';
 
 interface PendingEmail {
     id: number;
@@ -12,9 +13,16 @@ interface PendingEmail {
     parent_body: string | null;
     parent_body_html: string | null;
     parent_sent_at: string | null;
+    parent_reply_to: string | null;
+    parent_references: string | null;
     contact_name: string;
     contact_email: string;
 }
+
+// The References header sent on a reply is the parent's chain plus the
+// parent's own Message-ID, trimmed from the old end; threading only needs the
+// recent ids, and an unbounded chain would eventually overrun header limits.
+const MAX_REF_IDS = 10;
 
 interface DbAttachment {
     id: number;
@@ -209,6 +217,8 @@ export async function POST(request: Request) {
                p.message_id AS parent_message_id,
                p.body AS parent_body, p.body_html AS parent_body_html,
                p.sent_at AS parent_sent_at,
+               p.reply_to AS parent_reply_to,
+               p.references_hdr AS parent_references,
                c.name AS contact_name, c.email AS contact_email
         FROM email e
         JOIN contact c ON e.contact_id = c.id
@@ -313,11 +323,20 @@ export async function POST(request: Request) {
                 }
             }
 
+            // A reply goes to the parent's Reply-To when the contact's client
+            // set one (shared mailboxes, "on behalf of" senders); it was
+            // validated at ingest, but is re-checked so a row written by any
+            // other means cannot smuggle header syntax into To:.
+            const deliveryAddr = email.parent_reply_to && isValidEmail(email.parent_reply_to)
+                ? email.parent_reply_to
+                : email.contact_email;
+
             // CR/LF is stripped above; encodeHeaderText handles non-ASCII, which
             // would otherwise ride on undeclared 8-bit bytes in the headers.
             const headerLines = [
                 `From: ${encodeHeaderText(senderName)} <${from}>`,
-                `To: ${encodeHeaderText(safeName)} <${email.contact_email}>`,
+                `To: ${encodeHeaderText(safeName)} <${deliveryAddr}>`,
+                `Date: ${rfc2822Date(new Date())}`,
                 `Message-ID: <${msgId}>`,
                 `Subject: ${encodeHeaderText(safeSubject)}`,
             ];
@@ -326,21 +345,34 @@ export async function POST(request: Request) {
                 headerLines.push(`Cc: ${email.cc.replace(/[\r\n]/g, ' ')}`);
             }
             if (email.parent_message_id) {
-                headerLines.push(`In-Reply-To: <${email.parent_message_id}>`);
-                headerLines.push(`References: <${email.parent_message_id}>`);
+                // The parent is an inbound row, so its message_id came off the
+                // wire; strip anything that could break out of the <> block.
+                const parentMsgId = email.parent_message_id.replace(/[<>\s]/g, '');
+                headerLines.push(`In-Reply-To: <${parentMsgId}>`);
+                // RFC 5322: a reply's References is the parent's References
+                // followed by the parent's Message-ID. Folded one id per line,
+                // which keeps every line well under the 998-character limit.
+                const refIds = [...new Set([
+                    ...extractMessageIds(email.parent_references),
+                    parentMsgId,
+                ])].slice(-MAX_REF_IDS);
+                headerLines.push(`References: ${refIds.map(id => `<${id}>`).join('\r\n ')}`);
             }
 
             const dbAtts = attachmentsByEmail.get(email.id) ?? [];
             const attachmentData: { filename: string; content_type: string; data: ArrayBuffer }[] = [];
             for (const att of dbAtts) {
                 const obj = await env.ATTACHMENTS.get(att.r2_key);
-                if (obj) {
-                    attachmentData.push({ filename: att.filename, content_type: att.content_type, data: await obj.arrayBuffer() });
+                if (!obj) {
+                    // Sending without it would look complete to the recipient;
+                    // failing here releases the claim and surfaces the error.
+                    throw new Error(`attachment "${att.filename}" is missing from storage`);
                 }
+                attachmentData.push({ filename: att.filename, content_type: att.content_type, data: await obj.arrayBuffer() });
             }
 
             const raw = buildRaw(headerLines, bodyNormalised, htmlBody, attachmentData);
-            await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, email.contact_email, raw));
+            await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, deliveryAddr, raw));
             delivered = true;
 
             // The row was already marked sent by the claim above; only a reply
@@ -363,7 +395,16 @@ export async function POST(request: Request) {
             sent++;
 
             if (email.cc) {
-                const ccAddrs = email.cc.split(',').map((a: string) => a.trim()).filter(Boolean);
+                // Deduplicated case-insensitively, and anyone who already got
+                // the contact's copy is excluded rather than delivered twice.
+                const alreadySent = new Set([deliveryAddr.toLowerCase(), email.contact_email.toLowerCase()]);
+                const ccAddrs = email.cc.split(',').map((a: string) => a.trim()).filter(Boolean)
+                    .filter((a: string) => {
+                        const key = a.toLowerCase();
+                        if (alreadySent.has(key)) return false;
+                        alreadySent.add(key);
+                        return true;
+                    });
                 for (const addr of ccAddrs) {
                     try {
                         await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, addr, raw));

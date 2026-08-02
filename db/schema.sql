@@ -44,6 +44,9 @@ CREATE TABLE email (
     body_html      TEXT,             -- HTML body fragment; NULL = plain text only
     message_id     TEXT,             -- SMTP Message-ID; NULL for drafts, set on send/receive
     recipient      TEXT,             -- inbound only: the Mistflame address that received the email
+    reply_to       TEXT,             -- inbound only: Reply-To address when it differs from From
+    references_hdr TEXT,             -- inbound only: References header ids, "<a> <b>", most recent last
+    from_addr      TEXT,             -- inbound only: actual From address when not the contact (bounces)
     cc             TEXT,             -- comma-separated addresses
     FOREIGN KEY (contact_id) REFERENCES contact (id),
     FOREIGN KEY (parent_id) REFERENCES email (id) ON DELETE CASCADE
