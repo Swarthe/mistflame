@@ -140,8 +140,10 @@ INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, me
 -- table layout with inline
 -- colours that would be illegible on the dark card, a declared 1x1 tracking
 -- pixel (removed outright), a real remote image (placeholder until "Load
--- images"), a cid: inline image, a trailing gmail_quote blockquote for the ···
--- toggle, and an XSS battery that must all be neutralised.
+-- images"), two CSS background urls (one in the style block, one in an inline
+-- style; blocked and counted by default, proxied after "Load images"), a cid:
+-- inline image, a trailing gmail_quote blockquote for the ··· toggle, and an
+-- XSS battery that must all be neutralised.
 --
 -- body is the plain-text rendition the receiver derives via htmlToText;
 -- body_html is the fragment htmlToFragment produces (no doctype or wrapper).
@@ -165,9 +167,9 @@ INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, me
 -- request succeeds, the decode fails, and the image reports naturalWidth 0, which
 -- looks exactly like a bug in the rendering path.
 --
--- The remote image URL below is fictional, so "Load images" fetches it through
--- /api/img and gets a 502. That is the proxy working; swap in any real image URL
--- to see it render.
+-- The remote image and background URLs below are fictional, so "Load images"
+-- fetches them through /api/img and gets 502s. That is the proxy working; swap
+-- in any real image URL to see it render.
 
 INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, body_html, message_id, recipient) VALUES (
     9, 2, NULL, NULL, '2026-05-29T09:30:00.000Z',
@@ -185,7 +187,8 @@ Thanks,
 Bob
 
 > Do you operate in Denmark?',
-    '<style>body{font-family:Georgia,serif;background:#fffbe6}.promo{color:#c00}</style>
+    '<style>body{font-family:Georgia,serif;background:#fffbe6}.promo{color:#c00}
+h1.promo{background-image:url(https://cdn.example.com/banner.png)}</style>
 <div dir="ltr"><table cellpadding="0" cellspacing="0"><tbody><tr><td style="color:#333333;font-size:14px">
 <h1 class="promo">Big &amp; Bold Offer</h1>
 <p>Hello&nbsp;there &mdash; have a look at our <a href="https://example.com/offer">latest brochure</a>.</p>

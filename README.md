@@ -254,8 +254,12 @@ npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD C
   tracking pixels do not fire when a message is opened. "Load images" fetches
   them through the worker, so the sender sees a Cloudflare address rather than
   your IP address; images declaring dimensions of 1x1 are discarded and never
-  load at all. Nothing proxied is stored, so deleting an email leaves no trace
-  of its images.
+  load at all. CSS `url(...)` backgrounds follow the same rule: blocked and
+  counted by default, proxied on "Load images". A CSS background has no
+  declared dimensions, so a background-based tracker cannot be discarded the
+  way a 1x1 pixel is; it fires only after the explicit opt-in, through the
+  proxy. Nothing proxied is stored, so deleting an email leaves no trace of
+  its images.
 - **Indexing**: `robots.txt` serves `Disallow: /` for all user agents, and
   `middleware.ts` sets `X-Robots-Tag: noindex, nofollow` and a restrictive
   Content-Security-Policy on every HTML response. That policy is what keeps
@@ -322,8 +326,6 @@ currently implemented.
 - **Inline images in quoted history**: `cid:` images are dropped from the quote
   of an outgoing reply, since their Content-ID belongs to the received message.
   A full mail client re-attaches those parts; this one does not
-- **Remote images in CSS**: `url(...)` backgrounds in inline styles stay blocked
-  even after "Load images"; only `<img>` elements are proxied
 - **Search scope**: full-text search covers subjects and message text, but not
   attachment contents or contact descriptions, and there are no field filters
   such as `from:` or date ranges

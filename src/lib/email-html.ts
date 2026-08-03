@@ -36,7 +36,10 @@ export interface SanitisedEmail {
     main: string;
     /** Trailing quoted history, or null when the email has none. */
     quote: string | null;
-    /** Remote images withheld in the message body. */
+    /**
+     * Remote images withheld in the message body, counting both <img>
+     * elements and CSS url(...) backgrounds.
+     */
     blockedImages: number;
     /**
      * Remote images withheld inside the quoted history. Counted separately
@@ -116,10 +119,54 @@ interface HookContext {
 let activeContext: HookContext | null = null;
 const hookedInstances = new WeakSet<object>();
 
-function scrubStyle(style: string): string {
-    return style
-        // Remote CSS images are not proxied, so they stay blocked in both modes.
-        .replace(/url\s*\([^)]*\)/gi, 'none')
+/**
+ * Matches url(...) with a double-quoted, single-quoted or bare argument. The
+ * extraction is deliberately conservative: a form this does not match, or a
+ * URL rewriteCssUrls declines, is neutralised or left for the inherited CSP
+ * (img-src 'self' data:) to refuse, so the failure mode is always a blocked
+ * image, never a loaded one.
+ */
+const CSS_URL_RE = /url\s*\(\s*(?:"([^"]*)"|'([^']*)'|([^"')\s][^)]*?))\s*\)/gi;
+
+/**
+ * Neutralise or proxy every url(...) in a run of CSS. data: images pass
+ * through (the CSP permits them, same as an <img>). Remote http(s) images are
+ * proxied when loading is enabled, otherwise replaced with none and counted,
+ * so CSS backgrounds contribute to the "Load images" count. Everything else,
+ * including anything containing a CSS escape or a quote, becomes none rather
+ * than being parsed further.
+ */
+function rewriteCssUrls(
+    css: string,
+    ctx: HookContext
+): { css: string; blocked: number } {
+    let blocked = 0;
+    const out = css.replace(CSS_URL_RE, (_m, dq, sq, bare) => {
+        const raw = ((dq ?? sq ?? bare) as string).trim();
+        if (raw.includes('\\') || raw.includes('"')) return 'none';
+        if (/^data:image\//i.test(raw)) return `url("${raw}")`;
+        if (!/^https?:\/\//i.test(raw)) return 'none';
+        if (!ctx.loadImages) {
+            blocked++;
+            return 'none';
+        }
+        // encodeURIComponent leaves ( and ) alone, so they are encoded by hand:
+        // the emitted CSS must not contain a stray paren, and nothing in it may
+        // spell expression( for the later scrub to mangle.
+        const encoded = encodeURIComponent(raw)
+            .replace(/\(/g, '%28')
+            .replace(/\)/g, '%29');
+        return `url("/api/img?u=${encoded}")`;
+    });
+    return { css: out, blocked };
+}
+
+function scrubStyle(
+    style: string,
+    ctx: HookContext
+): { css: string; blocked: number } {
+    const { css, blocked } = rewriteCssUrls(style, ctx);
+    const scrubbed = css
         .replace(/expression\s*\(/gi, 'blocked(')
         // position:fixed would escape the email container entirely. Offsets left
         // behind are inert once nothing can be positioned.
@@ -127,6 +174,7 @@ function scrubStyle(style: string): string {
         .replace(/;\s*(?=;)/g, '')
         .replace(/^\s*;\s*/, '')
         .trim();
+    return { css: scrubbed, blocked };
 }
 
 function rewriteImage(img: Element, ctx: HookContext): void {
@@ -184,9 +232,15 @@ function installHooks(purify: DOMPurify): void {
 
         const style = el.getAttribute('style');
         if (style) {
-            const scrubbed = scrubStyle(style);
-            if (scrubbed) el.setAttribute('style', scrubbed);
+            const { css, blocked } = scrubStyle(style, ctx);
+            if (css) el.setAttribute('style', css);
             else el.removeAttribute('style');
+            // The count marker countBlockedImages sums after the quote split.
+            // Unlike an <img>, a withheld background gets no placeholder; it
+            // is simply absent until "Load images" re-sanitises.
+            if (blocked > 0) {
+                el.setAttribute('data-mf-bg-blocked', String(blocked));
+            }
         }
 
         const tag = el.tagName.toLowerCase();
@@ -198,7 +252,15 @@ function installHooks(purify: DOMPurify): void {
         } else if (tag === 'style') {
             // The inherited CSP would refuse a remote stylesheet anyway; dropping
             // @import keeps the request from being attempted at all.
-            el.textContent = (el.textContent ?? '').replace(/@import[^;]*;?/gi, '');
+            const text = (el.textContent ?? '').replace(/@import[^;]*;?/gi, '');
+            const { css, blocked } = rewriteCssUrls(text, ctx);
+            el.textContent = css;
+            // Attributed to the style element itself, which usually sits at
+            // the top of the fragment, so stylesheet backgrounds count towards
+            // the main half even when their selectors target the quote.
+            if (blocked > 0) {
+                el.setAttribute('data-mf-bg-blocked', String(blocked));
+            }
         }
     });
 }
@@ -226,7 +288,11 @@ function isEmptyWrapper(el: HTMLElement): boolean {
 }
 
 function countBlockedImages(root: Container): number {
-    return root.querySelectorAll('img.mf-img-blocked').length;
+    let count = root.querySelectorAll('img.mf-img-blocked').length;
+    root.querySelectorAll('[data-mf-bg-blocked]').forEach(el => {
+        count += parseInt(el.getAttribute('data-mf-bg-blocked') ?? '', 10) || 0;
+    });
+    return count;
 }
 
 function serialise(nodes: Node[]): string {
