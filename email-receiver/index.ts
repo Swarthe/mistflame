@@ -29,6 +29,21 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_REF_IDS = 10;
 const MAX_REFS_LENGTH = 2000;
 
+// Bound on a stored address list (To or CC): a pathological header cannot
+// bloat the row; trailing addresses are dropped once the joined string
+// exceeds it.
+const MAX_ADDR_LIST = 2000;
+
+const joinAddrs = (list?: { address?: string }[]) => {
+    const addrs = (list ?? [])
+        .map(a => a.address)
+        .filter((a): a is string => !!a);
+    while (addrs.length > 1 && addrs.join(', ').length > MAX_ADDR_LIST) {
+        addrs.pop();
+    }
+    return addrs.join(', ') || null;
+};
+
 export default {
     async email(message: ForwardableEmailMessage, env: Env) {
         const rateMax = parseInt(env.RATE_LIMIT_MAX ?? '0', 10);
@@ -214,11 +229,14 @@ export default {
         }
 
         const recipient = message.to.toLowerCase();
-        const cc = parsed.cc?.map(a => a.address).filter((a): a is string => !!a).join(', ') || null;
+        const cc = joinAddrs(parsed.cc);
+        // The full parsed To: header list; the envelope address that routed
+        // the message here stays in `recipient`. Co-recipients feed Reply All.
+        const toAddrs = joinAddrs(parsed.to);
 
         const result = await env.DB
-            .prepare('INSERT INTO email (contact_id, parent_id, sender, sent_at, subject, body, body_html, message_id, recipient, cc, reply_to, references_hdr, from_addr) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            .bind(contact.id, parentId, null, new Date().toISOString(), subject, body.trim(), bodyHtml, msgId, recipient, cc, replyTo, referencesHdr, fromAddr)
+            .prepare('INSERT INTO email (contact_id, parent_id, sender, sent_at, subject, body, body_html, message_id, recipient, cc, to_addrs, reply_to, references_hdr, from_addr) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(contact.id, parentId, null, new Date().toISOString(), subject, body.trim(), bodyHtml, msgId, recipient, cc, toAddrs, replyTo, referencesHdr, fromAddr)
             .run();
 
         const emailId = result.meta.last_row_id;

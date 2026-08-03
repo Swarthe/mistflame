@@ -35,9 +35,15 @@ Email Workers (send and receive).
 **Sending**
 - Compose plain-text drafts, editable until sent; send one at a time or all at
   once
-- Pick the sender address per email; CC and attachments supported
+- Pick the sender address per email; additional To recipients, CC, BCC and
+  attachments supported (each recipient gets their own copy; BCC never appears
+  in a header). Recipient fields autocomplete from your contacts, with known
+  addresses highlighted
 - Replies are threaded and quote the message they answer, preserving its HTML,
-  and are delivered to the sender's `Reply-To` address when one is set
+  and are delivered to the sender's `Reply-To` address when one is set; Reply
+  All pre-fills the other recipients of the message being answered
+- Forward any received or sent email to another contact, attachments included;
+  a typed address becomes a new contact on the spot
 - Requires the Cloudflare Workers Paid plan; receiving and reading work on the
   free tier
 
@@ -218,10 +224,11 @@ npx wrangler d1 execute mistflame-db --remote --file db/migrations/002-indexes.s
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/003-revision.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/004-email-fts.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/005-reply-headers.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/006-recipients.sql
 ```
 
 002 to 004 use `IF NOT EXISTS` throughout and are safe to reapply, so an already
-current database is left alone. 001 and 005 are not: SQLite has no
+current database is left alone. 001, 005 and 006 are not: SQLite has no
 `ADD COLUMN IF NOT EXISTS`, so they error rather than doing nothing. Check
 whether they are needed with
 `npx wrangler d1 execute mistflame-db --remote --command "PRAGMA table_info(email)"`.
@@ -330,8 +337,7 @@ currently implemented.
 - **Push updates**: new mail appears through polling rather than a push, so it
   can take up to five seconds to show. The poll itself is cheap (see Notes), but
   there is no WebSocket or SSE channel
-- **Forwarding / BCC / multiple recipients**: an email goes to one contact,
-  plus CC; there is no forward, BCC, or multi-recipient To
+- Mobile/small window friendly UI
 
 ## Notes
 

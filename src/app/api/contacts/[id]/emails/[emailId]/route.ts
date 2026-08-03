@@ -18,6 +18,8 @@ export async function PATCH(
     const subject = typeof body?.subject === 'string' ? body.subject : null;
     const emailBody = body?.body;
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
+    const toAddrs = typeof body?.to_addrs === 'string' && body.to_addrs.trim() ? body.to_addrs.trim() : null;
+    const bcc = typeof body?.bcc === 'string' && body.bcc.trim() ? body.bcc.trim() : null;
     const sender = typeof body?.sender === 'string' ? body.sender : null;
 
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
@@ -32,10 +34,18 @@ export async function PATCH(
     if (!sender) {
         return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
     }
-    // Same reasoning as the POST handler: an invalid CC address would only
+    // Same reasoning as the POST handler: an invalid address would only
     // fail at send time, after the contact's copy has been delivered.
-    if (cc && cc.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a))) {
+    const hasInvalidAddr = (list: string) =>
+        list.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a));
+    if (cc && hasInvalidAddr(cc)) {
         return Response.json({ ok: false, error: 'Invalid CC address.' }, { status: 400 });
+    }
+    if (toAddrs && hasInvalidAddr(toAddrs)) {
+        return Response.json({ ok: false, error: 'Invalid To address.' }, { status: 400 });
+    }
+    if (bcc && hasInvalidAddr(bcc)) {
+        return Response.json({ ok: false, error: 'Invalid BCC address.' }, { status: 400 });
     }
 
     const { env } = await getCloudflareContext({ async: true });
@@ -46,8 +56,8 @@ export async function PATCH(
     }
 
     const result = await env.DB
-        .prepare('UPDATE email SET subject = ?, body = ?, cc = ?, sender = ? WHERE id = ? AND contact_id = ? AND sent_at IS NULL')
-        .bind(subject, emailBody.trim(), cc, sender, emailIdNum, contactId)
+        .prepare('UPDATE email SET subject = ?, body = ?, cc = ?, to_addrs = ?, bcc = ?, sender = ? WHERE id = ? AND contact_id = ? AND sent_at IS NULL')
+        .bind(subject, emailBody.trim(), cc, toAddrs, bcc, sender, emailIdNum, contactId)
         .run();
 
     if (result.meta.changes === 0) {

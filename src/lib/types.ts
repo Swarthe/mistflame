@@ -43,10 +43,18 @@ export interface EmailRecord {
     /** HTML alternative; null means body is the only rendition. */
     body_html: string | null;
     recipient: string | null;
+    /** Reply-To address of inbound mail when it differs from From; the
+     *  send path delivers replies there instead of the contact. */
+    reply_to: string | null;
     /** Actual From address when the row was not written by the contact
      *  themselves (bounces threaded onto the message that failed). */
     from_addr: string | null;
     cc: string | null;
+    /** Inbound: the parsed To: header list. Draft: extra To addresses
+     *  beyond the contact. Sent: the full delivered To list. */
+    to_addrs: string | null;
+    /** Outgoing only; delivered as separate copies, never in headers. */
+    bcc: string | null;
     attachments: Attachment[];
 }
 

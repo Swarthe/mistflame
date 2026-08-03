@@ -9,6 +9,7 @@ import { ContactSidebar } from '@/components/ContactSidebar';
 import { ContactForm } from '@/components/ContactForm';
 import { EmailCard } from '@/components/EmailCard';
 import { NewEmailCard } from '@/components/NewEmailCard';
+import { ForwardModal } from '@/components/ForwardModal';
 import { SendModal, type SendResult } from '@/components/SendModal';
 import { TagChip } from '@/components/TagChip';
 import { btnGhost } from '@/components/styles';
@@ -55,7 +56,14 @@ export default function OutreachPage() {
 
     const [addingEmail, setAddingEmail] = useState(false);
     const [replyToEmail, setReplyToEmail] = useState<EmailRecord | null>(null);
+    // Empty for a plain reply; Reply All fills it with the parent's other
+    // recipients. Part of the composer's remount key.
+    const [replyInitialCc, setReplyInitialCc] = useState('');
     const [editingEmailId, setEditingEmailId] = useState<number | null>(null);
+
+    const [forwardingEmail, setForwardingEmail] = useState<EmailRecord | null>(null);
+    const [forwardBusy, setForwardBusy] = useState(false);
+    const [forwardError, setForwardError] = useState<string | null>(null);
 
     const [showSendModal, setShowSendModal] = useState(false);
     const [sendingEmails, setSendingEmails] = useState(false);
@@ -375,16 +383,41 @@ export default function OutreachPage() {
     const startAddEmail = () => {
         if (addingEmail && !confirm('Discard unsaved email?')) return;
         setReplyToEmail(null);
+        setReplyInitialCc('');
         setAddingEmail(true);
     };
 
-    const startReply = (email: EmailRecord) => {
+    const startReply = (email: EmailRecord, all = false) => {
         if (addingEmail && !confirm('Discard unsaved email?')) return;
+        // Reply All: the parent's other To recipients and CC move into CC,
+        // minus everything that gets a copy anyway (the contact, or the
+        // Reply-To standing in for them) and every address that is us (our
+        // send addresses, plus the one that received the parent; a catch-all
+        // route means it may not be listed in SEND_ADDRS).
+        let cc = '';
+        if (all) {
+            const excluded = new Set([
+                ...sendAddrs.map(a => a.toLowerCase()),
+                ...(selectedContact ? [selectedContact.email.toLowerCase()] : []),
+                ...(email.recipient ? [email.recipient.toLowerCase()] : []),
+                ...(email.reply_to ? [email.reply_to.toLowerCase()] : []),
+            ]);
+            cc = [...(email.to_addrs ?? '').split(','), ...(email.cc ?? '').split(',')]
+                .map(a => a.trim()).filter(Boolean)
+                .filter(a => {
+                    const key = a.toLowerCase();
+                    if (excluded.has(key)) return false;
+                    excluded.add(key);
+                    return true;
+                })
+                .join(', ');
+        }
         setReplyToEmail(email);
+        setReplyInitialCc(cc);
         setAddingEmail(true);
     };
 
-    const addEmail = async (sender: string | null, subject: string, body: string, cc: string, files: File[]) => {
+    const addEmail = async (sender: string | null, subject: string, body: string, cc: string, toAddrs: string, bcc: string, files: File[]) => {
         if (!selectedId) return;
         setSaving(true);
         setApiError(null);
@@ -394,6 +427,8 @@ export default function OutreachPage() {
                 subject: subject.trim() || null,
                 body,
                 cc: cc.trim() || null,
+                to_addrs: toAddrs.trim() || null,
+                bcc: bcc.trim() || null,
                 parent_id: replyToEmail?.id ?? null,
             };
             const res = await apiFetch(`/api/contacts/${selectedId}/emails`, {
@@ -478,15 +513,15 @@ export default function OutreachPage() {
         }
     };
 
-    const editEmail = async (emailId: number, sender: string | null, subject: string, body: string, cc: string) => {
+    const editEmail = async (emailId: number, sender: string | null, subject: string, body: string, cc: string, toAddrs: string, bcc: string) => {
         const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sender, subject: subject.trim() || null, body, cc: cc.trim() || null }),
+            body: JSON.stringify({ sender, subject: subject.trim() || null, body, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null }),
         });
         if (res.ok) {
             setEmails(prev => {
-                const updated = prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, cc: cc.trim() || null } : e);
+                const updated = prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null } : e);
                 const awaiting = updated.some(e => {
                     const threadEmails = updated.filter(x => x.thread_id === e.thread_id);
                     const last = threadEmails.reduce((a, b) => b.id > a.id ? b : a);
@@ -515,6 +550,77 @@ export default function OutreachPage() {
             }
             refreshPendingCount();
             refreshContacts();
+        }
+    };
+
+    const startForward = (email: EmailRecord) => {
+        setForwardError(null);
+        setForwardingEmail(email);
+    };
+
+    const forwardEmail = async (targetId: number) => {
+        if (!forwardingEmail) return;
+        setForwardBusy(true);
+        setForwardError(null);
+        try {
+            // Prefer the address the source arrived on, so a forward goes out
+            // from the mailbox that saw the original; a catch-all recipient
+            // not in SEND_ADDRS falls back to the first configured address.
+            const sender = forwardingEmail.recipient && sendAddrs.includes(forwardingEmail.recipient)
+                ? forwardingEmail.recipient
+                : sendAddrs[0] ?? null;
+            const res = await apiFetch(`/api/contacts/${targetId}/emails/forward`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source_id: forwardingEmail.id, sender }),
+            });
+            const data = (await res.json()) as { email_id?: number; attachments_failed?: number; error?: string };
+            if (!res.ok || !data.email_id) {
+                setForwardError(data.error ?? `Server error (${res.status})`);
+                return;
+            }
+            setForwardingEmail(null);
+            if (targetId === selectedId) {
+                // The selectedId effect does not refire on an unchanged id.
+                fetchEmails(targetId);
+            } else if (!selectContact(targetId)) {
+                return;
+            }
+            setPendingScrollId(data.email_id);
+            if ((data.attachments_failed ?? 0) > 0) {
+                setApiError(`Forward created, but ${data.attachments_failed} attachment${data.attachments_failed! > 1 ? 's' : ''} could not be copied.`);
+            }
+            refreshPendingCount();
+            refreshContacts();
+        } catch {
+            setForwardError('Network error — could not reach the server.');
+        } finally {
+            setForwardBusy(false);
+        }
+    };
+
+    const createContactAndForward = async (address: string) => {
+        setForwardBusy(true);
+        setForwardError(null);
+        try {
+            const res = await apiFetch('/api/contacts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                // Same convention as receiver-created contacts: the address
+                // stands in for the name until someone edits it.
+                body: JSON.stringify({ name: address, email: address }),
+            });
+            const data = (await res.json()) as { contact?: Contact; error?: string };
+            if (!res.ok || !data.contact) {
+                setForwardError(data.error ?? 'Failed to create contact.');
+                return;
+            }
+            setContacts(prev => [...prev, data.contact!].sort((a, b) => a.name.localeCompare(b.name)));
+            await forwardEmail(data.contact.id);
+        } catch {
+            setForwardError('Network error — could not reach the server.');
+        } finally {
+            setForwardBusy(false);
         }
     };
 
@@ -684,6 +790,8 @@ export default function OutreachPage() {
                                                         key={email.id}
                                                         email={email}
                                                         contactName={selectedContact.name}
+                                                        contactEmail={selectedContact.email}
+                                                        contacts={contacts}
                                                         parentEmail={email.parent_id != null ? emailById.get(email.parent_id) : null}
                                                         orgName={orgName}
                                                         sendAddrs={sendAddrs}
@@ -691,8 +799,10 @@ export default function OutreachPage() {
                                                         senderEditable={email.sender !== null && outgoingInThread.length === 1 && !replyIds.has(email.id)}
                                                         highlighted={highlightId === email.id}
                                                         onReply={() => startReply(email)}
+                                                        onReplyAll={() => startReply(email, true)}
+                                                        onForward={() => startForward(email)}
                                                         onDelete={() => deleteEmail(email.id)}
-                                                        onEdit={(sender, subject, body, cc) => editEmail(email.id, sender, subject, body, cc)}
+                                                        onEdit={(sender, subject, body, cc, toAddrs, bcc) => editEmail(email.id, sender, subject, body, cc, toAddrs, bcc)}
                                                         onSend={() => sendSingleEmail(email.id)}
                                                         onAttachmentUpload={(file) => uploadAttachment(email.id, file)}
                                                         onAttachmentDelete={(attId) => deleteAttachment(email.id, attId)}
@@ -701,16 +811,20 @@ export default function OutreachPage() {
                                                 ))}
                                                 {addingEmail && replyToEmail?.thread_id === threadId && (
                                                     <div ref={composeRef}>
-                                                        {/* Keyed by the reply target: switching to another
-                                                            email in the same thread must remount the card,
+                                                        {/* Keyed by the reply target and the CC prefill:
+                                                            switching to another email, or between Reply and
+                                                            Reply all on the same one, must remount the card,
                                                             or its subject and CC keep the old target's. */}
                                                         <NewEmailCard
-                                                            key={replyToEmail?.id}
+                                                            key={`${replyToEmail?.id}:${replyInitialCc}`}
                                                             replyTo={replyToEmail}
                                                             contactName={selectedContact.name}
+                                                            contactEmail={selectedContact.email}
+                                                            contacts={contacts}
                                                             orgName={orgName}
                                                             sendAddrs={sendAddrs}
                                                             threadSender={threadSender}
+                                                            initialCc={replyInitialCc}
                                                             saving={saving}
                                                             onSave={addEmail}
                                                             onCancel={() => { setAddingEmail(false); setReplyToEmail(null); }}
@@ -729,9 +843,12 @@ export default function OutreachPage() {
                                             <NewEmailCard
                                                 replyTo={null}
                                                 contactName={selectedContact.name}
+                                                contactEmail={selectedContact.email}
+                                                contacts={contacts}
                                                 orgName={orgName}
                                                 sendAddrs={sendAddrs}
                                                 threadSender={null}
+                                                initialCc=""
                                                 saving={saving}
                                                 onSave={addEmail}
                                                 onCancel={() => { setAddingEmail(false); setReplyToEmail(null); }}
@@ -750,6 +867,17 @@ export default function OutreachPage() {
                     )}
                 </main>
             </div>
+
+            {forwardingEmail && (
+                <ForwardModal
+                    contacts={contacts}
+                    busy={forwardBusy}
+                    error={forwardError}
+                    onPick={forwardEmail}
+                    onCreate={createContactAndForward}
+                    onClose={() => { setForwardingEmail(null); setForwardError(null); }}
+                />
+            )}
 
             {showSendModal && (
                 <SendModal

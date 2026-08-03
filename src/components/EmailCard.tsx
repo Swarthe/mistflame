@@ -2,17 +2,21 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { buildEmailDocument } from '@/lib/email-html';
-import type { EmailRecord } from '@/lib/types';
-import { formatDate, splitQuote, validateCc } from '@/lib/format';
+import type { Contact, EmailRecord } from '@/lib/types';
+import { formatDate, splitQuote } from '@/lib/format';
 import { useSanitisedHtml } from '@/hooks/useSanitisedHtml';
 import { EmailFrame } from '@/components/EmailFrame';
 import { ReplyPreview } from '@/components/ReplyPreview';
 import { AttachmentChip } from '@/components/AttachmentChip';
+import { RecipientField } from '@/components/RecipientField';
 import { inputCls, btnPrimary, btnGhost, btnDanger } from '@/components/styles';
 
-export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs, threadSender, senderEditable, highlighted, onReply, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
+export function EmailCard({ email, contactName, contactEmail, contacts, parentEmail, orgName, sendAddrs, threadSender, senderEditable, highlighted, onReply, onReplyAll, onForward, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
     email: EmailRecord;
     contactName: string;
+    contactEmail: string;
+    /** For recipient autocomplete and chip styling in edit mode. */
+    contacts: Contact[];
     parentEmail?: EmailRecord | null;
     orgName: string;
     sendAddrs: string[];
@@ -21,8 +25,10 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
     /** Outlined because a search result pointed here. */
     highlighted: boolean;
     onReply: () => void;
+    onReplyAll: () => void;
+    onForward: () => void;
     onDelete: () => void;
-    onEdit: (sender: string | null, subject: string, body: string, cc: string) => Promise<void>;
+    onEdit: (sender: string | null, subject: string, body: string, cc: string, toAddrs: string, bcc: string) => Promise<void>;
     onSend: () => Promise<void>;
     onAttachmentUpload: (file: File) => Promise<void>;
     onAttachmentDelete: (attachmentId: number) => Promise<void>;
@@ -43,7 +49,10 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
     const [editSubject, setEditSubject] = useState(email.subject ?? '');
     const [editBody, setEditBody] = useState(email.body);
     const [editCc, setEditCc] = useState(email.cc ?? '');
-    const [editCcError, setEditCcError] = useState<string | null>(null);
+    // Drafts hold draft semantics in to_addrs (extra addresses beyond the
+    // contact), so seeding the input from the row is correct.
+    const [editToAddrs, setEditToAddrs] = useState(email.to_addrs ?? '');
+    const [editBcc, setEditBcc] = useState(email.bcc ?? '');
     const [editSaving, setEditSaving] = useState(false);
     const [sending, setSending] = useState(false);
     const [uploading, setUploading] = useState(false);
@@ -76,7 +85,7 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
     const saveEdit = async () => {
         setEditSaving(true);
         try {
-            await onEdit(editSender, editSubject, editBody, editCc);
+            await onEdit(editSender, editSubject, editBody, editCc, editToAddrs, editBcc);
             setEditing(false);
         } finally {
             setEditSaving(false);
@@ -89,7 +98,8 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
         setEditSubject(email.subject ?? '');
         setEditBody(email.body);
         setEditCc(email.cc ?? '');
-        setEditCcError(null);
+        setEditToAddrs(email.to_addrs ?? '');
+        setEditBcc(email.bcc ?? '');
     };
 
     const handleSend = async () => {
@@ -108,8 +118,8 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
     if (editing) {
         return (
             <div id={`email-${email.id}`} className={`${cardCls} gap-3`}>
-                <div className="flex flex-col gap-1">
-                    <div className="flex gap-2 items-center">
+                <div className="flex flex-col gap-2">
+                    <div className="flex gap-2 items-start">
                         {senderLocked ? (
                             <div className="w-48 shrink-0 text-sm font-sans text-white/35 border border-white/10 bg-white/[0.04] px-3 py-2.5">{threadSender}</div>
                         ) : (
@@ -117,17 +127,30 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
                                 {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
                             </select>
                         )}
-                        <div className="flex-[1_1_160px] min-w-0 overflow-hidden">
-                            <input
-                                className={inputCls}
-                                placeholder="CC (comma-separated)"
-                                value={editCc}
-                                onChange={e => { setEditCc(e.target.value); if (editCcError) setEditCcError(validateCc(e.target.value)); }}
-                                onBlur={e => setEditCcError(validateCc(e.target.value))}
-                            />
-                        </div>
+                        <RecipientField
+                            label="To"
+                            fixedAddress={parentEmail?.reply_to ?? contactEmail}
+                            value={editToAddrs}
+                            onChange={setEditToAddrs}
+                            contacts={contacts}
+                        />
                     </div>
-                    {editCcError && <p className="text-xs text-red-400 font-sans">{editCcError}</p>}
+                    <div className="flex gap-2 items-start">
+                        <RecipientField
+                            label="CC"
+                            value={editCc}
+                            onChange={setEditCc}
+                            contacts={contacts}
+                            placeholder="CC recipients"
+                        />
+                        <RecipientField
+                            label="BCC"
+                            value={editBcc}
+                            onChange={setEditBcc}
+                            contacts={contacts}
+                            placeholder="BCC recipients"
+                        />
+                    </div>
                 </div>
                 <input
                     className={inputCls}
@@ -161,7 +184,7 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
                     {uploadError && <span className="text-xs text-red-400 font-sans">{uploadError}</span>}
                 </div>
                 <div className="flex gap-2">
-                    <button className={btnPrimary} onClick={saveEdit} disabled={editSaving || !editBody.trim() || !!editCcError}>
+                    <button className={btnPrimary} onClick={saveEdit} disabled={editSaving || !editBody.trim()}>
                         {editSaving ? 'Saving…' : 'Save'}
                     </button>
                     <button className={btnGhost} onClick={cancelEdit}>Cancel</button>
@@ -190,14 +213,16 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
     return (
         <div id={`email-${email.id}`} className={cardCls}>
             {parentEmail && <ReplyPreview email={parentEmail} contactName={contactName} orgName={orgName} />}
-            <div className="flex items-start justify-between gap-2">
+            {/* Both halves wrap: on a narrow window the button group drops to
+                its own right-aligned line instead of colliding with the name. */}
+            <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
                 <div className="flex items-baseline gap-2 min-w-0">
                     {/* from_addr marks a third party writing into the contact's
                         thread (a bounce), so name it rather than the contact. */}
                     <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? orgName : email.from_addr ?? contactName}</span>
                     {isUs && email.sender && <span className="text-xs text-white/35 font-sans truncate">{email.sender}</span>}
                 </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
+                <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 ml-auto">
                     {!isUs && email.recipient && (
                         <span className="text-xs text-white/35 font-sans">→ {email.recipient.split('@')[0]}</span>
                     )}
@@ -212,11 +237,24 @@ export function EmailCard({ email, contactName, parentEmail, orgName, sendAddrs,
                     {/* No reply to a bounce: the composer would address the
                         contact, not the reporting MTA the card names. */}
                     {!isUs && !email.from_addr && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>}
+                    {!isUs && !email.from_addr && !!(email.cc || email.to_addrs) && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReplyAll}>+ Reply all</button>}
+                    {email.sent_at !== null && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onForward}>Forward</button>}
                     <button className={btnDanger} onClick={onDelete} title="Delete email">✕</button>
                 </div>
             </div>
+            {/* A draft's to_addrs holds the extras beyond the contact; a sent
+                or inbound row's holds the full list. Legacy sent rows have
+                none and show nothing, as before. */}
+            {isUs && email.sent_at === null ? (
+                <div className="text-xs text-white/40 font-sans">To: {contactEmail}{email.to_addrs ? `, ${email.to_addrs}` : ''}</div>
+            ) : email.to_addrs ? (
+                <div className="text-xs text-white/40 font-sans">To: {email.to_addrs}</div>
+            ) : null}
             {email.cc && (
                 <div className="text-xs text-white/40 font-sans">CC: {email.cc}</div>
+            )}
+            {email.bcc && (
+                <div className="text-xs text-white/40 font-sans">BCC: {email.bcc}</div>
             )}
             {email.subject && !email.parent_id && (
                 <div className="text-xs text-white/45 font-sans">{email.subject}</div>

@@ -60,8 +60,11 @@ On 28 May 2026, 10:15, Mistflame wrote:
 
 -- ── Thread 2 (Alice): inbound question → unsent draft reply ──
 
--- Email 4: inbound from Alice, no quote (button should NOT show)
-INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+-- Email 4: inbound from Alice with co-recipients (inbound to_addrs is the
+-- parsed To: header; the envelope address stays in recipient). Shows the
+-- "+ Reply all" button: the prefill keeps bob (a contact, golden chip) and
+-- carol (unknown, grey chip) and drops our own address.
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient, cc, to_addrs) VALUES (
     4, 1, NULL, NULL, '2026-05-27T14:00:00.000Z',
     'Brochure request',
     'Hi,
@@ -70,23 +73,29 @@ Do you have a brochure or one-pager I could share with my team?
 
 Thanks,
 Alice',
-    'brochure.req@example.com', 'hello@example.com'
+    'brochure.req@example.com', 'hello@example.com',
+    'carol@example.net', 'hello@example.com, bob@example.com'
 );
 
--- Email 5: unsent draft reply (sent_at NULL; button should NOT show on drafts)
-INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+-- Email 5: unsent draft reply (sent_at NULL; quote button should NOT show on
+-- drafts). Draft to_addrs holds the *extras* beyond the contact (bob shows as
+-- a golden contact chip in the editor); bcc is never emitted in a header.
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient, to_addrs, bcc) VALUES (
     5, 1, 4, 'hello@example.com', NULL,
     'Re: Brochure request',
     'Hi Alice,
 
 Happy to put something together for you. I will send it over by end of week.',
-    NULL, NULL
+    NULL, NULL,
+    'bob@example.com', 'records@example.net'
 );
 
 -- ── Thread 3 (Bob): outbound email → inbound reply with quote ──
 
--- Email 6: outbound sent, no quote (button should NOT show)
-INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+-- Email 6: outbound sent, no quote (button should NOT show). On a sent row
+-- to_addrs is the full delivered To list, snapshotted by the send-time claim
+-- (contact first, then the extras); the card shows it as the To: line.
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient, cc, to_addrs, bcc) VALUES (
     6, 2, NULL, 'hello@example.com', '2026-05-26T14:00:00.000Z',
     'Introduction',
     'Hi Bob,
@@ -95,7 +104,8 @@ I wanted to introduce Mistflame. We specialise in digital model generation from 
 
 Best,
 Mistflame',
-    'intro.xyz@example.com', NULL
+    'intro.xyz@example.com', NULL,
+    'carol@example.net', 'bob@example.com, dana@example.org', 'archive@example.net'
 );
 
 -- Email 7: inbound reply with quoted text (button SHOULD show)
@@ -198,3 +208,25 @@ Bob
 INSERT INTO attachment (id, email_id, file_name, content_type, r2_key, size, content_id, inline) VALUES
     (1, 9, 'logo.png', 'image/png', '9/seed-logo.png', 157, 'seed-logo-1', 1),
     (2, 9, 'brochure.pdf', 'application/pdf', '9/seed-brochure.pdf', 1024, NULL, 0);
+
+-- ── Thread 5 (Alice): forwarded draft ──────────────────────────────────────────
+--
+-- What the Forward button produces: a fresh draft thread under the target
+-- contact with the source message baked into the body as a block. The block
+-- collapses behind the same ··· toggle as reply quotes (second marker in
+-- splitQuote), and being a draft it counts towards the pending-send badge.
+
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+    10, 1, NULL, 'hello@example.com', NULL,
+    'Fwd: Quick question',
+    'Alice, this seems like one for you.
+
+---------- Forwarded message ----------
+From: Bob Tremblay <bob@example.com>
+Date: 25 May 2026, 08:00
+Subject: Quick question
+To: hello@example.com
+
+Do you operate in Denmark?',
+    NULL, NULL
+);

@@ -8,6 +8,8 @@ interface PendingEmail {
     subject: string | null;
     body: string;
     cc: string | null;
+    to_addrs: string | null;
+    bcc: string | null;
     parent_id: number | null;
     parent_message_id: string | null;
     parent_body: string | null;
@@ -213,7 +215,8 @@ export async function POST(request: Request) {
     const senderName = env.ORG_NAME || 'Mistflame';
 
     const baseQuery = `
-        SELECT e.id, e.sender, e.subject, e.body, e.cc, e.parent_id,
+        SELECT e.id, e.sender, e.subject, e.body, e.cc, e.to_addrs, e.bcc,
+               e.parent_id,
                p.message_id AS parent_message_id,
                p.body AS parent_body, p.body_html AS parent_body_html,
                p.sent_at AS parent_sent_at,
@@ -270,6 +273,30 @@ export async function POST(request: Request) {
             const fromDomain = from.split('@')[1] ?? 'example.com';
             const msgId = generateMessageId(fromDomain);
 
+            // A reply goes to the parent's Reply-To when the contact's client
+            // set one (shared mailboxes, "on behalf of" senders); it was
+            // validated at ingest, but is re-checked so a row written by any
+            // other means cannot smuggle header syntax into To:.
+            const deliveryAddr = email.parent_reply_to && isValidEmail(email.parent_reply_to)
+                ? email.parent_reply_to
+                : email.contact_email;
+
+            // One dedupe set spans To extras, CC and BCC: seeded with the
+            // primary address and the contact, drained as each list is
+            // walked, so an address gets exactly one copy however many
+            // fields list it.
+            const alreadySent = new Set([deliveryAddr.toLowerCase(), email.contact_email.toLowerCase()]);
+            const takeNew = (list: string | null) =>
+                (list ?? '').split(',').map((a: string) => a.trim()).filter(Boolean)
+                    .filter((a: string) => {
+                        const key = a.toLowerCase();
+                        if (alreadySent.has(key)) return false;
+                        alreadySent.add(key);
+                        return true;
+                    });
+            const extraTo = takeNew(email.to_addrs);
+            const fullTo = [deliveryAddr, ...extraTo].join(', ');
+
             // Claim the row before sending, so two requests handling the same
             // pending draft cannot both deliver it: the conditional UPDATE is
             // atomic, and whichever request matches zero rows backs off. A
@@ -277,10 +304,14 @@ export async function POST(request: Request) {
             // unchanged; the residual risk is a crash between here and the
             // send, which leaves the row marked sent but undelivered. That is
             // the right way round to be wrong: with concurrent users, the
-            // double send is the likelier and the worse failure.
+            // double send is the likelier and the worse failure. The claim
+            // also snapshots the full delivered To list into to_addrs, so a
+            // sent row records where the mail actually went even if the
+            // contact's address is edited later; the release below restores
+            // the draft's own extras.
             const claim = await env.DB
-                .prepare('UPDATE email SET sent_at = ?, message_id = ? WHERE id = ? AND sent_at IS NULL')
-                .bind(sentAt, msgId, email.id)
+                .prepare('UPDATE email SET sent_at = ?, message_id = ?, to_addrs = ? WHERE id = ? AND sent_at IS NULL')
+                .bind(sentAt, msgId, fullTo, email.id)
                 .run();
             if (!claim.meta.changes) {
                 continue;
@@ -323,19 +354,13 @@ export async function POST(request: Request) {
                 }
             }
 
-            // A reply goes to the parent's Reply-To when the contact's client
-            // set one (shared mailboxes, "on behalf of" senders); it was
-            // validated at ingest, but is re-checked so a row written by any
-            // other means cannot smuggle header syntax into To:.
-            const deliveryAddr = email.parent_reply_to && isValidEmail(email.parent_reply_to)
-                ? email.parent_reply_to
-                : email.contact_email;
-
             // CR/LF is stripped above; encodeHeaderText handles non-ASCII, which
             // would otherwise ride on undeclared 8-bit bytes in the headers.
+            // Extra To addresses were validated at POST/PATCH; the strip is
+            // defensive, matching the Cc line. BCC never gets a header.
             const headerLines = [
                 `From: ${encodeHeaderText(senderName)} <${from}>`,
-                `To: ${encodeHeaderText(safeName)} <${deliveryAddr}>`,
+                `To: ${[`${encodeHeaderText(safeName)} <${deliveryAddr}>`, ...extraTo].join(', ').replace(/[\r\n]/g, ' ')}`,
                 `Date: ${rfc2822Date(new Date())}`,
                 `Message-ID: <${msgId}>`,
                 `Subject: ${encodeHeaderText(safeSubject)}`,
@@ -394,24 +419,22 @@ export async function POST(request: Request) {
 
             sent++;
 
-            if (email.cc) {
-                // Deduplicated case-insensitively, and anyone who already got
-                // the contact's copy is excluded rather than delivered twice.
-                const alreadySent = new Set([deliveryAddr.toLowerCase(), email.contact_email.toLowerCase()]);
-                const ccAddrs = email.cc.split(',').map((a: string) => a.trim()).filter(Boolean)
-                    .filter((a: string) => {
-                        const key = a.toLowerCase();
-                        if (alreadySent.has(key)) return false;
-                        alreadySent.add(key);
-                        return true;
-                    });
-                for (const addr of ccAddrs) {
-                    try {
-                        await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, addr, raw));
-                    } catch (ccErr) {
-                        const msg = ccErr instanceof Error ? ccErr.message : String(ccErr);
-                        errors.push(`${email.contact_name}: CC copy to ${addr} failed: ${msg}`);
-                    }
+            // Every further recipient gets the same raw bytes, one send per
+            // address, drained through the shared dedupe set in order To,
+            // CC, BCC (an address in both cc and bcc goes out once, as the
+            // header-visible CC). Failures here are non-fatal: the contact's
+            // copy is out, so the claim cannot be released.
+            const copies = [
+                ...extraTo.map((addr: string) => ({ kind: 'To', addr })),
+                ...takeNew(email.cc).map((addr: string) => ({ kind: 'CC', addr })),
+                ...takeNew(email.bcc).map((addr: string) => ({ kind: 'BCC', addr })),
+            ];
+            for (const { kind, addr } of copies) {
+                try {
+                    await env.EMAIL_SENDER.send(new cfEmailMod.EmailMessage(from, addr, raw));
+                } catch (copyErr) {
+                    const msg = copyErr instanceof Error ? copyErr.message : String(copyErr);
+                    errors.push(`${email.contact_name}: ${kind} copy to ${addr} failed: ${msg}`);
                 }
             }
         } catch (err) {
@@ -422,9 +445,11 @@ export async function POST(request: Request) {
             // side of not sending twice.
             if (claimed && !delivered) {
                 try {
+                    // to_addrs goes back to the draft's own extras, undoing
+                    // the full-list snapshot the claim wrote.
                     await env.DB
-                        .prepare('UPDATE email SET sent_at = NULL, message_id = NULL WHERE id = ?')
-                        .bind(email.id)
+                        .prepare('UPDATE email SET sent_at = NULL, message_id = NULL, to_addrs = ? WHERE id = ?')
+                        .bind(email.to_addrs, email.id)
                         .run();
                 } catch {
                     // reported below either way

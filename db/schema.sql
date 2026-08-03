@@ -48,6 +48,10 @@ CREATE TABLE email (
     references_hdr TEXT,             -- inbound only: References header ids, "<a> <b>", most recent last
     from_addr      TEXT,             -- inbound only: actual From address when not the contact (bounces)
     cc             TEXT,             -- comma-separated addresses
+    -- to_addrs: inbound = parsed To: header list; draft = extra To addresses
+    -- beyond the contact; sent = full delivered To list (send-time snapshot).
+    to_addrs       TEXT,
+    bcc            TEXT,             -- outgoing only: comma-separated, never in headers
     FOREIGN KEY (contact_id) REFERENCES contact (id),
     FOREIGN KEY (parent_id) REFERENCES email (id) ON DELETE CASCADE
 );

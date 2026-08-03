@@ -6,12 +6,6 @@
 // worse trade.
 export const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
 
-export const validateCc = (cc: string): string | null => {
-    if (!cc.trim()) return null;
-    const invalid = cc.split(',').map(a => a.trim()).filter(a => a && !isValidEmail(a));
-    return invalid.length > 0 ? `Invalid: ${invalid.join(', ')}` : null;
-};
-
 export function hexToRgba(hex: string, alpha: number): string {
     const h = hex.replace('#', '');
     const r = parseInt(h.slice(0, 2), 16) || 0;
@@ -46,10 +40,21 @@ export function formatDate(iso: string): string {
 
 export function splitQuote(body: string): { main: string; quote: string | null } {
     const normalised = body.replace(/\r\n/g, '\n');
-    const match = normalised.match(/\n\nOn .+? wrote:/);
-    if (!match || match.index === undefined) return { main: normalised.trimEnd(), quote: null };
+    // Reply quotes and forwarded blocks both collapse; earliest match wins.
+    // -{4,} also catches Gmail-style inbound forward separators.
+    let best: { start: number; quoteStart: number } | null = null;
+    for (const re of [/\n\nOn .+? wrote:/, /(?:^|\n\n)-{4,} Forwarded message -{4,}/]) {
+        const match = normalised.match(re);
+        if (match?.index === undefined) continue;
+        if (best !== null && match.index >= best.start) continue;
+        best = {
+            start: match.index,
+            quoteStart: match.index + (match[0].startsWith('\n\n') ? 2 : 0),
+        };
+    }
+    if (best === null) return { main: normalised.trimEnd(), quote: null };
     return {
-        main: normalised.slice(0, match.index).trimEnd(),
-        quote: normalised.slice(match.index + 2).trimEnd(),
+        main: normalised.slice(0, best.start).trimEnd(),
+        quote: normalised.slice(best.quoteStart).trimEnd(),
     };
 }

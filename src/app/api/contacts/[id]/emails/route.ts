@@ -18,8 +18,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                 SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
             )
             SELECT e.id, e.contact_id, e.parent_id, e.sender, e.sent_at, e.subject,
-                   e.body, e.body_html, e.message_id, e.recipient, e.from_addr,
-                   e.cc, r.thread_id
+                   e.body, e.body_html, e.message_id, e.recipient, e.reply_to,
+                   e.from_addr, e.cc, e.to_addrs, e.bcc, r.thread_id
             FROM email e JOIN ranked r ON e.id = r.id
             -- A batch send stamps every row with the same sent_at, so the id
             -- tie-break keeps same-second messages in a stable order.
@@ -56,6 +56,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const subject = typeof body?.subject === 'string' ? body.subject : null;
     const emailBody = body?.body;
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
+    const toAddrs = typeof body?.to_addrs === 'string' && body.to_addrs.trim() ? body.to_addrs.trim() : null;
+    const bcc = typeof body?.bcc === 'string' && body.bcc.trim() ? body.bcc.trim() : null;
     const rawParentId = body?.parent_id;
 
     if (!sender) {
@@ -70,11 +72,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (subject !== null && subject.length > 500) {
         return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
     }
-    // Validated here rather than only in the client, because an invalid CC
+    // Validated here rather than only in the client, because an invalid
     // address surfaces at send time, where its EmailMessage would fail after
     // the contact's copy has already been delivered.
-    if (cc && cc.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a))) {
+    const hasInvalidAddr = (list: string) =>
+        list.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a));
+    if (cc && hasInvalidAddr(cc)) {
         return Response.json({ ok: false, error: 'Invalid CC address.' }, { status: 400 });
+    }
+    if (toAddrs && hasInvalidAddr(toAddrs)) {
+        return Response.json({ ok: false, error: 'Invalid To address.' }, { status: 400 });
+    }
+    if (bcc && hasInvalidAddr(bcc)) {
+        return Response.json({ ok: false, error: 'Invalid BCC address.' }, { status: 400 });
     }
 
     const parent_id = rawParentId != null ? parseInt(String(rawParentId), 10) : null;
@@ -101,8 +111,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         }
 
         const result = await env.DB
-            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, cc) VALUES (?, ?, ?, ?, ?, ?)')
-            .bind(contactId, parent_id, sender, subject, emailBody.trim(), cc)
+            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, cc, to_addrs, bcc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(contactId, parent_id, sender, subject, emailBody.trim(), cc, toAddrs, bcc)
             .run();
 
         const emailId = result.meta.last_row_id;
@@ -137,8 +147,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 // generated at send time when the parent has one.
                 body_html: null,
                 recipient: null,
+                reply_to: null,
                 from_addr: null,
                 cc,
+                to_addrs: toAddrs,
+                bcc,
             },
         }, { status: 201 });
     } catch (err) {
