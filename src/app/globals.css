@@ -100,3 +100,64 @@
   border: 0;
   background: #ffffff;
 }
+
+/*
+ * Our own markdown-composed messages, rendered inline in the email card and
+ * in the composer preview; not in a frame, because the renderer's output is a
+ * closed tag set (see src/lib/markdown.ts) with nothing to isolate. Preflight
+ * has flattened lists, headings and blockquotes, so this restores exactly the
+ * elements markdown-it can produce, in card-sized type on the dark surface.
+ */
+.mf-markdown > :first-child { margin-top: 0; }
+.mf-markdown > :last-child { margin-bottom: 0; }
+.mf-markdown p,
+.mf-markdown ul,
+.mf-markdown ol,
+.mf-markdown blockquote,
+.mf-markdown pre,
+.mf-markdown table { margin: 0.6em 0; }
+.mf-markdown h1,
+.mf-markdown h2,
+.mf-markdown h3,
+.mf-markdown h4,
+.mf-markdown h5,
+.mf-markdown h6 { font-weight: 600; margin: 0.8em 0 0.4em; }
+.mf-markdown h1 { font-size: 1.3em; }
+.mf-markdown h2 { font-size: 1.2em; }
+.mf-markdown h3 { font-size: 1.1em; }
+.mf-markdown ul { list-style: disc; padding-left: 1.4em; }
+.mf-markdown ol { list-style: decimal; padding-left: 1.4em; }
+.mf-markdown blockquote {
+  border-left: 2px solid rgba(255, 255, 255, 0.2);
+  padding-left: 0.8em;
+  color: rgba(255, 255, 255, 0.6);
+}
+.mf-markdown code {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.1em 0.3em;
+  font-size: 0.9em;
+}
+.mf-markdown pre {
+  background: rgba(255, 255, 255, 0.07);
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+}
+.mf-markdown pre code { background: none; padding: 0; }
+.mf-markdown a {
+  color: #ffd54f;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mf-markdown a:hover { color: #ffe082; }
+.mf-markdown hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  margin: 0.8em 0;
+}
+.mf-markdown table { border-collapse: collapse; }
+.mf-markdown th,
+.mf-markdown td {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 0.25em 0.6em;
+}
+.mf-markdown th { font-weight: 600; }

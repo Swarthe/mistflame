@@ -42,6 +42,9 @@ CREATE TABLE email (
     subject        TEXT,
     body           TEXT    NOT NULL, -- canonical plain-text rendition; always populated
     body_html      TEXT,             -- HTML body fragment; NULL = plain text only
+    -- Outgoing composing format: 'markdown' means body holds markdown source,
+    -- rendered to HTML at send time and for display. Inbound rows stay 'text'.
+    body_format    TEXT    NOT NULL DEFAULT 'text',
     message_id     TEXT,             -- SMTP Message-ID; NULL for drafts, set on send/receive
     recipient      TEXT,             -- inbound only: the Mistflame address that received the email
     reply_to       TEXT,             -- inbound only: Reply-To address when it differs from From

@@ -31,6 +31,8 @@ export interface Attachment {
     inline: number;
 }
 
+export type BodyFormat = 'text' | 'markdown';
+
 export interface EmailRecord {
     id: number;
     contact_id: number;
@@ -42,6 +44,9 @@ export interface EmailRecord {
     body: string;
     /** HTML alternative; null means body is the only rendition. */
     body_html: string | null;
+    /** 'markdown' means body holds markdown source (outgoing rows only);
+     *  inbound rows are always 'text'. */
+    body_format: BodyFormat;
     recipient: string | null;
     /** Reply-To address of inbound mail when it differs from From; the
      *  send path delivers replies there instead of the contact. */

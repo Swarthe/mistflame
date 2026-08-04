@@ -1,5 +1,6 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
 import { encodeHeaderText, extractMessageIds, rfc2822Date } from '@/lib/mime';
+import { renderMarkdown } from '@/lib/markdown';
 import { isValidEmail } from '@/app/api/contacts/route';
 
 interface PendingEmail {
@@ -7,6 +8,7 @@ interface PendingEmail {
     sender: string;
     subject: string | null;
     body: string;
+    body_format: string;
     cc: string | null;
     to_addrs: string | null;
     bcc: string | null;
@@ -156,9 +158,9 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * The composed reply itself is always plain text: the composer is a textarea, so
- * the HTML rendition of our own words is just escaped text with line breaks. Only
- * the quoted history below it carries real markup.
+ * The HTML rendition of a plain-text composition (or of a plain-text parent
+ * quoted under a markdown reply): escaped text with line breaks. Markdown
+ * compositions go through renderMarkdown instead.
  */
 function textToHtml(text: string): string {
     return escapeHtml(text.replace(/\r\n/g, '\n')).split('\n').join('<br>\n');
@@ -215,7 +217,8 @@ export async function POST(request: Request) {
     const senderName = env.ORG_NAME || 'Mistflame';
 
     const baseQuery = `
-        SELECT e.id, e.sender, e.subject, e.body, e.cc, e.to_addrs, e.bcc,
+        SELECT e.id, e.sender, e.subject, e.body, e.body_format,
+               e.cc, e.to_addrs, e.bcc,
                e.parent_id,
                p.message_id AS parent_message_id,
                p.body AS parent_body, p.body_html AS parent_body_html,
@@ -320,11 +323,21 @@ export async function POST(request: Request) {
 
             const safeName = email.contact_name.replace(/[<>\\\r\n]/g, '');
             const safeSubject = (email.subject ?? '(no subject)').replace(/[\r\n]/g, ' ');
+            const isMarkdown = email.body_format === 'markdown';
+            const composedText = email.body.replace(/\r\n/g, '\n').trimEnd();
+            // Our own words in the HTML rendition: rendered markdown, or
+            // escaped text with <br> line breaks.
+            const composedHtml = isMarkdown
+                ? renderMarkdown(composedText)
+                : `<div>${textToHtml(composedText)}</div>`;
             let bodyNormalised = email.body.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
             let bodyForStorage: string | null = null;
-            // Only a reply to a message that had HTML gets an HTML rendition; a
-            // thread that started as plain text stays plain text throughout.
-            let htmlBody: string | null = null;
+            // A plain-text email gets an HTML rendition only when replying to
+            // a message that had one, so a thread that started as plain text
+            // stays plain text; a markdown email always carries one, since
+            // the markup is the point. Its text/plain part is the markdown
+            // source, which reads naturally as plain text.
+            let htmlBody: string | null = isMarkdown ? composedHtml : null;
             if (email.parent_body !== null) {
                 const when = email.parent_sent_at
                     ? new Date(email.parent_sent_at).toLocaleString('en-GB', { dateStyle: 'medium', timeStyle: 'short' })
@@ -338,17 +351,21 @@ export async function POST(request: Request) {
                 bodyNormalised += quoteBlock.replace(/\n/g, '\r\n');
                 bodyForStorage = email.body.replace(/\r\n/g, '\n').trimEnd() + quoteBlock;
 
-                if (email.parent_body_html !== null) {
-                    // Our own words as plain escaped text, then the parent's own
-                    // markup nested in a blockquote, so the recipient sees their
-                    // message quoted as they wrote it rather than flattened to
-                    // text. This is what a full mail client does.
+                if (email.parent_body_html !== null || isMarkdown) {
+                    // The parent's own markup nested in a blockquote, so the
+                    // recipient sees their message quoted as they wrote it
+                    // rather than flattened to text; a plain-text parent under
+                    // a markdown reply is quoted as escaped text instead. This
+                    // is what a full mail client does.
+                    const quotedHtml = email.parent_body_html !== null
+                        ? quotableHtml(email.parent_body_html)
+                        : `<div>${textToHtml(email.parent_body.replace(/\r\n/g, '\n').trimEnd())}</div>`;
                     htmlBody = [
-                        `<div>${textToHtml(email.body.replace(/\r\n/g, '\n').trimEnd())}</div>`,
+                        composedHtml,
                         '<br>',
                         `<div>On ${escapeHtml(when)}, ${escapeHtml(email.contact_name)} wrote:</div>`,
                         '<blockquote style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex">',
-                        quotableHtml(email.parent_body_html),
+                        quotedHtml,
                         '</blockquote>',
                     ].join('\n');
                 }

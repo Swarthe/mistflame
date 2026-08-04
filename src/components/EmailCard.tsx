@@ -5,10 +5,12 @@ import { buildEmailDocument } from '@/lib/email-html';
 import type { Contact, EmailRecord } from '@/lib/types';
 import { formatDate, splitQuote } from '@/lib/format';
 import { useSanitisedHtml } from '@/hooks/useSanitisedHtml';
+import { useMarkdownHtml } from '@/hooks/useMarkdownHtml';
 import { EmailFrame } from '@/components/EmailFrame';
 import { ReplyPreview } from '@/components/ReplyPreview';
 import { AttachmentChip } from '@/components/AttachmentChip';
 import { RecipientField } from '@/components/RecipientField';
+import { BodyEditor } from '@/components/BodyEditor';
 import { inputCls, btnPrimary, btnGhost, btnDanger } from '@/components/styles';
 
 export function EmailCard({ email, contactName, contactEmail, contacts, parentEmail, orgName, sendAddrs, threadSender, senderEditable, highlighted, onReply, onReplyAll, onForward, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
@@ -62,6 +64,13 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
     // should be made again on a fresh view rather than inherited.
     const [loadImages, setLoadImages] = useState(false);
     const sanitised = useSanitisedHtml(email, loadImages);
+    // Computed before the edit-mode return because the markdown hook below
+    // must run on every render. Only the part above the quote is rendered as
+    // markdown: the appended quote block is plain text by construction.
+    const { main: bodyMain, quote: bodyQuote } = splitQuote(email.body);
+    const markdownHtml = useMarkdownHtml(
+        isUs && email.body_format === 'markdown' ? bodyMain : null
+    );
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -158,11 +167,9 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
                     value={editSubject}
                     onChange={e => setEditSubject(e.target.value)}
                 />
-                <textarea
-                    className={`${inputCls} resize-y min-h-[120px]`}
-                    rows={6}
+                <BodyEditor
                     value={editBody}
-                    onChange={e => setEditBody(e.target.value)}
+                    onChange={setEditBody}
                 />
                 <div className="flex flex-wrap items-center gap-2">
                     {email.attachments.map(att => (
@@ -193,7 +200,6 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
         );
     }
 
-    const { main: bodyMain, quote: bodyQuote } = splitQuote(email.body);
     // Until the sanitiser resolves, the plain-text rendition stands in; it is
     // also the permanent fallback if the dynamic import fails.
     const showHtml = sanitised !== null;
@@ -205,8 +211,17 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
             + (quoteExpanded ? sanitised.blockedImagesInQuote : 0)
         : 0;
     const fileAttachments = email.attachments.filter(att => att.inline === 0);
-    // Used both as the plain-text rendition and as the frame's fallback.
-    const textBody = (
+    // Used both as the plain-text rendition and as the frame's fallback. Our
+    // own markdown rows render inline rather than in a frame: the output is
+    // markdown-it's closed tag set (see src/lib/markdown.ts), so there is
+    // nothing to isolate. Until the renderer resolves (or if it fails), the
+    // source shows as plain text, which is what markdown degrades to.
+    const textBody = markdownHtml !== null ? (
+        <div
+            className="mf-markdown text-sm text-white/85 leading-relaxed font-sans"
+            dangerouslySetInnerHTML={{ __html: markdownHtml }}
+        />
+    ) : (
         <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{bodyMain}</p>
     );
 

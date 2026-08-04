@@ -5,6 +5,7 @@ import type { Contact, EmailRecord } from '@/lib/types';
 import { formatSize } from '@/lib/format';
 import { ReplyPreview } from '@/components/ReplyPreview';
 import { RecipientField } from '@/components/RecipientField';
+import { BodyEditor } from '@/components/BodyEditor';
 import { inputCls, btnPrimary, btnGhost } from '@/components/styles';
 
 export function NewEmailCard({ replyTo, contactName, contactEmail, contacts, orgName, sendAddrs, threadSender, initialCc, saving, onSave, onCancel }: {
@@ -89,12 +90,10 @@ export function NewEmailCard({ replyTo, contactName, contactEmail, contacts, org
                 </div>
             </div>
             <input className={inputCls} placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} />
-            <textarea
-                className={`${inputCls} resize-y min-h-[120px]`}
-                rows={6}
-                placeholder="Email body *"
+            <BodyEditor
                 value={body}
-                onChange={e => setBody(e.target.value)}
+                onChange={setBody}
+                placeholder="Email body *"
             />
             <div className="flex flex-wrap items-center gap-2">
                 {pendingFiles.map((file, idx) => (

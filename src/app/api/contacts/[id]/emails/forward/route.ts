@@ -106,9 +106,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
             draftBody = draftBody.slice(0, 99_970) + '\n\n[message truncated]';
         }
 
+        // 'markdown' like everything else composed in the UI: the editor is
+        // markdown-only, so an edit would save the draft as markdown anyway,
+        // and creating it that way keeps the unedited case consistent. The
+        // forwarded block is arbitrary source text, so markdown may reformat
+        // it at send time; the composer preview shows exactly what goes out.
         const result = await env.DB
-            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body) VALUES (?, NULL, ?, ?, ?)')
-            .bind(contactId, sender, subject, draftBody)
+            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, body_format) VALUES (?, NULL, ?, ?, ?, ?)')
+            .bind(contactId, sender, subject, draftBody, 'markdown')
             .run();
         const emailId = result.meta.last_row_id;
 

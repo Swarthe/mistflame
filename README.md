@@ -33,8 +33,9 @@ Email Workers (send and receive).
 - Attachments and inline images stored in R2 and shown in the UI
 
 **Sending**
-- Compose plain-text drafts, editable until sent; send one at a time or all at
-  once
+- Compose drafts in markdown, editable until sent; send one at a time or all
+  at once. The editor has a formatting toolbar and a preview; the message goes
+  out as rich text with the readable source as the plain-text part
 - Pick the sender address per email; additional To recipients, CC, BCC and
   attachments supported (each recipient gets their own copy; BCC never appears
   in a header). Recipient fields autocomplete from your contacts, with known
@@ -249,7 +250,9 @@ npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD C
   only your own.
 - **HTML email**: inbound HTML is sanitised with DOMPurify and rendered in a
   sandboxed iframe with scripts disabled, so a sender's markup and stylesheet
-  apply to their message and cannot reach the rest of the app.
+  apply to their message and cannot reach the rest of the app. Your own
+  markdown-composed messages are rendered with raw HTML disabled, so markup
+  typed into the composer stays literal text.
 - **Remote images**: blocked by default and replaced with a placeholder, so
   tracking pixels do not fire when a message is opened. "Load images" fetches
   them through the worker, so the sender sees a Cloudflare address rather than
@@ -320,9 +323,9 @@ database.
 Contributions and feature requests are welcome. The following features are not
 currently implemented.
 
-- **Rich-text composing**: the composer is plain text only. Replies to HTML
-  emails carry an HTML part so the quote chain survives, but your own words in
-  the reply are not formatted
+- **WYSIWYG composing**: formatting is written as markdown in a plain
+  textarea (with a toolbar and preview) rather than edited in place, and
+  outgoing mail cannot carry composed inline images
 - **Inline images in quoted history**: `cid:` images are dropped from the quote
   of an outgoing reply, since their Content-ID belongs to the received message.
   A full mail client re-attaches those parts; this one does not

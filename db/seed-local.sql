@@ -219,7 +219,7 @@ INSERT INTO attachment (id, email_id, file_name, content_type, r2_key, size, con
 -- collapses behind the same ··· toggle as reply quotes (second marker in
 -- splitQuote), and being a draft it counts towards the pending-send badge.
 
-INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, body_format, message_id, recipient) VALUES (
     10, 1, NULL, 'hello@example.com', NULL,
     'Fwd: Quick question',
     'Alice, this seems like one for you.
@@ -231,5 +231,51 @@ Subject: Quick question
 To: hello@example.com
 
 Do you operate in Denmark?',
+    'markdown', NULL, NULL
+);
+
+-- ── Thread 6 (Alice): markdown composition ─────────────────────────────────────
+--
+-- body_format = 'markdown' (migration 007): body holds markdown source, which
+-- the card renders inline (headings, bold, list, link, code, blockquote) and
+-- the send path renders into the outgoing HTML part. Email 11 exercises the
+-- read view; draft 13 exercises the editor, and being a reply gets the quote
+-- appended at send time. Draft 5 above stays 'text', standing in for rows
+-- predating the markdown editor; saving an edit converts it.
+
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, body_format, message_id, recipient) VALUES (
+    11, 1, NULL, 'hello@example.com', '2026-05-30T10:00:00.000Z',
+    'Onboarding steps',
+    'Hi Alice,
+
+## Getting started
+
+Here is what we need from you, in order of **priority**:
+
+- Signed agreement (see the [portal](https://example.com/portal))
+- Brand assets, ideally as `svg`
+- A short bio
+
+> Deadlines are soft until the agreement is in.
+
+Best,
+Mistflame',
+    'markdown',
+    'md.sent@example.com', NULL
+);
+
+-- Email 12: inbound reply, then a markdown draft answering it.
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+    12, 1, 11, NULL, '2026-05-30T12:00:00.000Z',
+    'Re: Onboarding steps',
+    'All makes sense. Which formats do you accept for the bio?',
+    'md.inbound@example.com', 'hello@example.com'
+);
+
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, body_format, message_id, recipient) VALUES (
+    13, 1, 12, 'hello@example.com', NULL,
+    'Re: Onboarding steps',
+    'Anything works, but *plain text* or `markdown` is easiest for us.',
+    'markdown',
     NULL, NULL
 );

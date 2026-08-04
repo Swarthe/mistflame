@@ -18,8 +18,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                 SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
             )
             SELECT e.id, e.contact_id, e.parent_id, e.sender, e.sent_at, e.subject,
-                   e.body, e.body_html, e.message_id, e.recipient, e.reply_to,
-                   e.from_addr, e.cc, e.to_addrs, e.bcc, r.thread_id
+                   e.body, e.body_html, e.body_format, e.message_id, e.recipient,
+                   e.reply_to, e.from_addr, e.cc, e.to_addrs, e.bcc, r.thread_id
             FROM email e JOIN ranked r ON e.id = r.id
             -- A batch send stamps every row with the same sent_at, so the id
             -- tie-break keeps same-second messages in a stable order.
@@ -58,10 +58,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
     const toAddrs = typeof body?.to_addrs === 'string' && body.to_addrs.trim() ? body.to_addrs.trim() : null;
     const bcc = typeof body?.bcc === 'string' && body.bcc.trim() ? body.bcc.trim() : null;
+    // Optional; anything but the two known values is rejected rather than
+    // defaulted, so a typo cannot silently store a markdown draft as text.
+    const bodyFormat = body?.body_format == null ? 'text' : body.body_format;
     const rawParentId = body?.parent_id;
 
     if (!sender) {
         return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
+    }
+    if (bodyFormat !== 'text' && bodyFormat !== 'markdown') {
+        return Response.json({ ok: false, error: 'Invalid body_format.' }, { status: 400 });
     }
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
         return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
@@ -111,8 +117,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         }
 
         const result = await env.DB
-            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, cc, to_addrs, bcc) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-            .bind(contactId, parent_id, sender, subject, emailBody.trim(), cc, toAddrs, bcc)
+            .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, body_format, cc, to_addrs, bcc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+            .bind(contactId, parent_id, sender, subject, emailBody.trim(), bodyFormat, cc, toAddrs, bcc)
             .run();
 
         const emailId = result.meta.last_row_id;
@@ -143,9 +149,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 sent_at: null,
                 subject,
                 body: emailBody.trim(),
-                // Composed drafts are plain text; an HTML alternative is only
-                // generated at send time when the parent has one.
+                // A composed draft stores no HTML even in markdown format: the
+                // rendition is generated at send time and for display, so
+                // body_html stays receiver-only.
                 body_html: null,
+                body_format: bodyFormat,
                 recipient: null,
                 reply_to: null,
                 from_addr: null,

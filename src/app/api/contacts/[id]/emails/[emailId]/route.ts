@@ -21,9 +21,14 @@ export async function PATCH(
     const toAddrs = typeof body?.to_addrs === 'string' && body.to_addrs.trim() ? body.to_addrs.trim() : null;
     const bcc = typeof body?.bcc === 'string' && body.bcc.trim() ? body.bcc.trim() : null;
     const sender = typeof body?.sender === 'string' ? body.sender : null;
+    // Same contract as the POST handler: optional, unknown values rejected.
+    const bodyFormat = body?.body_format == null ? 'text' : body.body_format;
 
     if (typeof emailBody !== 'string' || !emailBody.trim()) {
         return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
+    }
+    if (bodyFormat !== 'text' && bodyFormat !== 'markdown') {
+        return Response.json({ ok: false, error: 'Invalid body_format.' }, { status: 400 });
     }
     if (emailBody.length > 100_000) {
         return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
@@ -56,8 +61,8 @@ export async function PATCH(
     }
 
     const result = await env.DB
-        .prepare('UPDATE email SET subject = ?, body = ?, cc = ?, to_addrs = ?, bcc = ?, sender = ? WHERE id = ? AND contact_id = ? AND sent_at IS NULL')
-        .bind(subject, emailBody.trim(), cc, toAddrs, bcc, sender, emailIdNum, contactId)
+        .prepare('UPDATE email SET subject = ?, body = ?, body_format = ?, cc = ?, to_addrs = ?, bcc = ?, sender = ? WHERE id = ? AND contact_id = ? AND sent_at IS NULL')
+        .bind(subject, emailBody.trim(), bodyFormat, cc, toAddrs, bcc, sender, emailIdNum, contactId)
         .run();
 
     if (result.meta.changes === 0) {

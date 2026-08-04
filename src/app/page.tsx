@@ -426,6 +426,9 @@ export default function OutreachPage() {
                 sender,
                 subject: subject.trim() || null,
                 body,
+                // Everything composed in the UI is markdown; 'text' marks
+                // inbound rows and rows predating migration 007.
+                body_format: 'markdown',
                 cc: cc.trim() || null,
                 to_addrs: toAddrs.trim() || null,
                 bcc: bcc.trim() || null,
@@ -514,14 +517,16 @@ export default function OutreachPage() {
     };
 
     const editEmail = async (emailId: number, sender: string | null, subject: string, body: string, cc: string, toAddrs: string, bcc: string) => {
+        // Saving through the markdown editor makes the draft markdown, even
+        // one created as 'text' before the editor became markdown-only.
         const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sender, subject: subject.trim() || null, body, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null }),
+            body: JSON.stringify({ sender, subject: subject.trim() || null, body, body_format: 'markdown', cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null }),
         });
         if (res.ok) {
             setEmails(prev => {
-                const updated = prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null } : e);
+                const updated = prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, body_format: 'markdown' as const, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null } : e);
                 const awaiting = updated.some(e => {
                     const threadEmails = updated.filter(x => x.thread_id === e.thread_id);
                     const last = threadEmails.reduce((a, b) => b.id > a.id ? b : a);
