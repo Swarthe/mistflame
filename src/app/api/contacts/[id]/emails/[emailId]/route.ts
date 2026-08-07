@@ -1,5 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import { isValidEmail } from '@/app/api/contacts/route';
+import { parseAddrList, parseDraftFields } from '@/lib/server/validation';
 
 export async function PATCH(
     request: Request,
@@ -13,56 +13,23 @@ export async function PATCH(
     }
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    // Anything other than a string (a JSON number, say) would otherwise be
-    // bound into the row as-is.
-    const subject = typeof body?.subject === 'string' ? body.subject : null;
-    const emailBody = body?.body;
-    const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
-    const toAddrs = typeof body?.to_addrs === 'string' && body.to_addrs.trim() ? body.to_addrs.trim() : null;
-    const bcc = typeof body?.bcc === 'string' && body.bcc.trim() ? body.bcc.trim() : null;
-    const sender = typeof body?.sender === 'string' ? body.sender : null;
-    // Same contract as the POST handler: optional, unknown values rejected.
-    const bodyFormat = body?.body_format == null ? 'text' : body.body_format;
-
-    if (typeof emailBody !== 'string' || !emailBody.trim()) {
-        return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
+    // Same contract as the POST handler, enforced by sharing the parser.
+    const parsed = parseDraftFields(body);
+    if (!parsed.ok) {
+        return Response.json({ ok: false, error: parsed.error }, { status: 400 });
     }
-    if (bodyFormat !== 'text' && bodyFormat !== 'markdown') {
-        return Response.json({ ok: false, error: 'Invalid body_format.' }, { status: 400 });
-    }
-    if (emailBody.length > 100_000) {
-        return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
-    }
-    if (subject !== null && subject.length > 500) {
-        return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
-    }
-    if (!sender) {
-        return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
-    }
-    // Same reasoning as the POST handler: an invalid address would only
-    // fail at send time, after the contact's copy has been delivered.
-    const hasInvalidAddr = (list: string) =>
-        list.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a));
-    if (cc && hasInvalidAddr(cc)) {
-        return Response.json({ ok: false, error: 'Invalid CC address.' }, { status: 400 });
-    }
-    if (toAddrs && hasInvalidAddr(toAddrs)) {
-        return Response.json({ ok: false, error: 'Invalid To address.' }, { status: 400 });
-    }
-    if (bcc && hasInvalidAddr(bcc)) {
-        return Response.json({ ok: false, error: 'Invalid BCC address.' }, { status: 400 });
-    }
+    const { sender, subject, body: emailBody, bodyFormat, cc, toAddrs, bcc } = parsed.fields;
 
     const { env } = await getCloudflareContext({ async: true });
 
-    const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
+    const validAddrs = parseAddrList(env.SEND_ADDRS);
     if (!validAddrs.includes(sender)) {
         return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
     }
 
     const result = await env.DB
         .prepare('UPDATE email SET subject = ?, body = ?, body_format = ?, cc = ?, to_addrs = ?, bcc = ?, sender = ? WHERE id = ? AND contact_id = ? AND sent_at IS NULL')
-        .bind(subject, emailBody.trim(), bodyFormat, cc, toAddrs, bcc, sender, emailIdNum, contactId)
+        .bind(subject, emailBody, bodyFormat, cc, toAddrs, bcc, sender, emailIdNum, contactId)
         .run();
 
     if (result.meta.changes === 0) {

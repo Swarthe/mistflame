@@ -1,5 +1,19 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import { isValidEmail } from '@/app/api/contacts/route';
+import { parseAddrList, parseDraftFields } from '@/lib/server/validation';
+
+// Thread numbering is computed, not stored: each email walks up parent_id to
+// its root, and threads are numbered by root in DENSE_RANK order. Takes the
+// contact id as its one bound parameter.
+const THREAD_CTE = `
+    WITH RECURSIVE ancestry AS (
+        SELECT id, id AS root_id FROM email WHERE parent_id IS NULL AND contact_id = ?
+        UNION ALL
+        SELECT e.id, a.root_id FROM email e JOIN ancestry a ON e.parent_id = a.id
+    ),
+    ranked AS (
+        SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
+    )
+`;
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
@@ -8,15 +22,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
     const { env } = await getCloudflareContext({ async: true });
     const { results: emails } = await env.DB
-        .prepare(`
-            WITH RECURSIVE ancestry AS (
-                SELECT id, id AS root_id FROM email WHERE parent_id IS NULL AND contact_id = ?
-                UNION ALL
-                SELECT e.id, a.root_id FROM email e JOIN ancestry a ON e.parent_id = a.id
-            ),
-            ranked AS (
-                SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
-            )
+        .prepare(THREAD_CTE + `
             SELECT e.id, e.contact_id, e.parent_id, e.sender, e.sent_at, e.subject,
                    e.body, e.body_html, e.body_format, e.message_id, e.recipient,
                    e.reply_to, e.from_addr, e.cc, e.to_addrs, e.bcc, r.thread_id
@@ -50,49 +56,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     if (isNaN(contactId)) return Response.json({ ok: false, error: 'Invalid ID.' }, { status: 400 });
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    const sender = typeof body?.sender === 'string' ? body.sender : null;
-    // Anything other than a string (a JSON number, say) would otherwise be
-    // bound into the row as-is.
-    const subject = typeof body?.subject === 'string' ? body.subject : null;
-    const emailBody = body?.body;
-    const cc = typeof body?.cc === 'string' && body.cc.trim() ? body.cc.trim() : null;
-    const toAddrs = typeof body?.to_addrs === 'string' && body.to_addrs.trim() ? body.to_addrs.trim() : null;
-    const bcc = typeof body?.bcc === 'string' && body.bcc.trim() ? body.bcc.trim() : null;
-    // Optional; anything but the two known values is rejected rather than
-    // defaulted, so a typo cannot silently store a markdown draft as text.
-    const bodyFormat = body?.body_format == null ? 'text' : body.body_format;
+    const parsed = parseDraftFields(body);
+    if (!parsed.ok) {
+        return Response.json({ ok: false, error: parsed.error }, { status: 400 });
+    }
+    const { sender, subject, body: emailBody, bodyFormat, cc, toAddrs, bcc } = parsed.fields;
+
     const rawParentId = body?.parent_id;
-
-    if (!sender) {
-        return Response.json({ ok: false, error: 'sender is required.' }, { status: 400 });
-    }
-    if (bodyFormat !== 'text' && bodyFormat !== 'markdown') {
-        return Response.json({ ok: false, error: 'Invalid body_format.' }, { status: 400 });
-    }
-    if (typeof emailBody !== 'string' || !emailBody.trim()) {
-        return Response.json({ ok: false, error: 'body is required.' }, { status: 400 });
-    }
-    if (emailBody.length > 100_000) {
-        return Response.json({ ok: false, error: 'body too long.' }, { status: 400 });
-    }
-    if (subject !== null && subject.length > 500) {
-        return Response.json({ ok: false, error: 'subject too long.' }, { status: 400 });
-    }
-    // Validated here rather than only in the client, because an invalid
-    // address surfaces at send time, where its EmailMessage would fail after
-    // the contact's copy has already been delivered.
-    const hasInvalidAddr = (list: string) =>
-        list.split(',').map(a => a.trim()).filter(Boolean).some(a => !isValidEmail(a));
-    if (cc && hasInvalidAddr(cc)) {
-        return Response.json({ ok: false, error: 'Invalid CC address.' }, { status: 400 });
-    }
-    if (toAddrs && hasInvalidAddr(toAddrs)) {
-        return Response.json({ ok: false, error: 'Invalid To address.' }, { status: 400 });
-    }
-    if (bcc && hasInvalidAddr(bcc)) {
-        return Response.json({ ok: false, error: 'Invalid BCC address.' }, { status: 400 });
-    }
-
     const parent_id = rawParentId != null ? parseInt(String(rawParentId), 10) : null;
     if (parent_id !== null && isNaN(parent_id)) {
         return Response.json({ ok: false, error: 'Invalid parent_id.' }, { status: 400 });
@@ -101,7 +71,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     try {
         const { env } = await getCloudflareContext({ async: true });
 
-        const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
+        const validAddrs = parseAddrList(env.SEND_ADDRS);
         if (!validAddrs.includes(sender)) {
             return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
         }
@@ -118,23 +88,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
         const result = await env.DB
             .prepare('INSERT INTO email (contact_id, parent_id, sender, subject, body, body_format, cc, to_addrs, bcc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-            .bind(contactId, parent_id, sender, subject, emailBody.trim(), bodyFormat, cc, toAddrs, bcc)
+            .bind(contactId, parent_id, sender, subject, emailBody, bodyFormat, cc, toAddrs, bcc)
             .run();
 
         const emailId = result.meta.last_row_id;
 
         const threadRow = await env.DB
-            .prepare(`
-                WITH RECURSIVE ancestry AS (
-                    SELECT id, id AS root_id FROM email WHERE parent_id IS NULL AND contact_id = ?
-                    UNION ALL
-                    SELECT e.id, a.root_id FROM email e JOIN ancestry a ON e.parent_id = a.id
-                ),
-                ranked AS (
-                    SELECT id, DENSE_RANK() OVER (ORDER BY root_id) AS thread_id FROM ancestry
-                )
-                SELECT thread_id FROM ranked WHERE id = ?
-            `)
+            .prepare(THREAD_CTE + 'SELECT thread_id FROM ranked WHERE id = ?')
             .bind(contactId, emailId)
             .first<{ thread_id: number }>();
 
@@ -148,7 +108,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 sender,
                 sent_at: null,
                 subject,
-                body: emailBody.trim(),
+                body: emailBody,
                 // A composed draft stores no HTML even in markdown format: the
                 // rendition is generated at send time and for display, so
                 // body_html stays receiver-only.

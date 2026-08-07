@@ -1,4 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { parseAddrList } from '@/lib/server/validation';
 
 // Defined identically in middleware.ts and auth/route.ts; the duplication
 // across execution contexts is deliberate (see CLAUDE.md).
@@ -26,8 +27,6 @@ export async function GET(request: Request) {
     const authed = await isAuthenticated(request, env);
     return Response.json({
         orgName: env.ORG_NAME ?? '',
-        sendAddrs: authed
-            ? (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean)
-            : [],
+        sendAddrs: authed ? parseAddrList(env.SEND_ADDRS) : [],
     });
 }

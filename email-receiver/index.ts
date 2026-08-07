@@ -1,6 +1,7 @@
 import PostalMime from 'postal-mime';
 import { htmlToText, htmlToFragment } from '../src/lib/html-to-text.mjs';
-import { encodeHeaderText, extractMessageIds, rfc2822Date } from '../src/lib/mime';
+import { encodeHeaderText, extractMessageIds, generateMessageId, rfc2822Date } from '../src/lib/mime';
+import { isValidEmail } from '../src/lib/server/validation';
 
 // Oversized HTML is dropped rather than truncated: a half-written fragment would
 // render as broken markup. The plain-text body is still stored.
@@ -17,13 +18,22 @@ interface Env {
     RATE_LIMIT_WINDOW_MINUTES?: string;
 }
 
-const generateMessageId = (domain: string) =>
-    `${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}`;
-
-// Same shape as isValidEmail in src/app/api/contacts/route.ts; duplicated for
-// the same reason as the REMEMBER_COOKIE constant (different execution
-// contexts; importing the route module would drag in @opennextjs/cloudflare).
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// One plain-text message, built the same way for the notification and the
+// rate-warning emails. The subject is RFC 2047-encoded (contact names are
+// routinely non-ASCII) and the body declares 8bit, since previews carry raw
+// 8-bit text.
+const buildPlainRaw = (from: string, to: string, subject: string, bodyLines: string[]) => [
+    `From: <${from}>`,
+    `To: <${to}>`,
+    `Date: ${rfc2822Date(new Date())}`,
+    `Message-ID: <${generateMessageId(from.split('@')[1] ?? 'localhost')}>`,
+    `Subject: ${encodeHeaderText(subject)}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    ...bodyLines,
+].join('\r\n');
 
 // Bounds on the stored References chain: enough ids for any real thread while
 // keeping the column, and the header rebuilt from it at send time, small.
@@ -98,23 +108,14 @@ export default {
                     const notifyAddrs = (env.NOTIFY_ADDRS ?? '').split(',').map(a => a.trim()).filter(Boolean);
                     if (notifyAddrs.length > 0) {
                         const from = message.to.toLowerCase();
-                        const fromDomain = from.split('@')[1] ?? 'localhost';
                         // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const cfEmail = await import(('cloudflare' + ':email') as any);
                         for (const addr of notifyAddrs) {
-                            const warnRaw = [
-                                `From: <${from}>`,
-                                `To: <${addr}>`,
-                                `Date: ${rfc2822Date(new Date())}`,
-                                `Message-ID: <${generateMessageId(fromDomain)}>`,
-                                'Subject: Inbound rate limit reached',
-                                'MIME-Version: 1.0',
-                                'Content-Type: text/plain; charset=UTF-8',
-                                '',
-                                `The inbound email rate limit has been reached. Further emails will be discarded until the next window.`,
+                            const warnRaw = buildPlainRaw(from, addr, 'Inbound rate limit reached', [
+                                'The inbound email rate limit has been reached. Further emails will be discarded until the next window.',
                                 '',
                                 `Limit: ${rateMax} emails per ${windowMinutes} minutes`,
-                            ].join('\r\n');
+                            ]);
                             try {
                                 await env.EMAIL_SENDER.send(new cfEmail.EmailMessage(from, addr, warnRaw));
                             } catch { /* ignore */ }
@@ -136,7 +137,7 @@ export default {
         // header too. The envelope remains as a fallback for a missing
         // or malformed header.
         const headerFrom = parsed.from?.address?.trim().toLowerCase() ?? '';
-        const fromEmail = EMAIL_RE.test(headerFrom)
+        const fromEmail = isValidEmail(headerFrom)
             ? headerFrom
             : message.from.toLowerCase();
         const msgId = parsed.messageId ? parsed.messageId.replace(/^<|>$/g, '').trim() : null;
@@ -149,7 +150,7 @@ export default {
         // Reply-To is stored only when it names a different address than From;
         // equal to From it adds nothing, and the send path falls back anyway.
         const rawReplyTo = parsed.replyTo?.[0]?.address?.trim() ?? '';
-        const replyTo = EMAIL_RE.test(rawReplyTo) && rawReplyTo.toLowerCase() !== fromEmail
+        const replyTo = isValidEmail(rawReplyTo) && rawReplyTo.toLowerCase() !== fromEmail
             ? rawReplyTo
             : null;
 
@@ -324,20 +325,8 @@ export default {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cfEmail = await import(('cloudflare' + ':email') as any);
         const notifySubject = `New message from ${displayFrom.replace(/[\r\n]/g, '')}`;
-        const notifyDomain = recipient.split('@')[1] ?? 'localhost';
         for (const addr of notifyAddrs) {
-            const notifyRaw = [
-                `From: <${recipient}>`,
-                `To: <${addr}>`,
-                `Date: ${rfc2822Date(new Date())}`,
-                `Message-ID: <${generateMessageId(notifyDomain)}>`,
-                // The contact's name is routinely non-ASCII, and the preview
-                // below is raw 8-bit text, so both need declaring.
-                `Subject: ${encodeHeaderText(notifySubject)}`,
-                'MIME-Version: 1.0',
-                'Content-Type: text/plain; charset=UTF-8',
-                'Content-Transfer-Encoding: 8bit',
-                '',
+            const notifyRaw = buildPlainRaw(recipient, addr, notifySubject, [
                 ...(notifyWarning ? [`[mistflame] ${notifyWarning}`, ''] : []),
                 `From:    ${displayFrom}`,
                 `To:      ${recipient}`,
@@ -346,7 +335,7 @@ export default {
                 '---',
                 '',
                 preview,
-            ].join('\r\n');
+            ]);
             try {
                 await env.EMAIL_SENDER.send(new cfEmail.EmailMessage(recipient, addr, notifyRaw));
             } catch { /* notification failure must not affect inbound processing */ }

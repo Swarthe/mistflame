@@ -50,6 +50,14 @@ export function extractMessageIds(value: string | null | undefined): string[] {
     return Array.from(value.matchAll(/<([^<>\s]+)>/g), m => m[1]);
 }
 
+/**
+ * A unique Message-ID value (without angle brackets) for an outgoing message.
+ * Shared by the send route and the receiver's notification emails; the send
+ * route also stores it so inbound In-Reply-To lookups match directly.
+ */
+export const generateMessageId = (domain: string) =>
+    `${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}`;
+
 export function encodeHeaderText(value: string): string {
     if (/^[\x20-\x7E]*$/.test(value)) return value;
     const chunks: string[] = [];

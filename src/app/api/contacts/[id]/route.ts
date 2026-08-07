@@ -1,5 +1,6 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import { isValidEmail, upsertTags } from '@/app/api/contacts/route';
+import { isValidEmail } from '@/lib/server/validation';
+import { upsertTags } from '@/lib/server/tags';
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;

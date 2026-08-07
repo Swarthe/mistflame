@@ -1,6 +1,6 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-
-export const isValidEmail = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+import { isValidEmail } from '@/lib/server/validation';
+import { upsertTags } from '@/lib/server/tags';
 
 interface ContactRow {
     id: number;
@@ -115,38 +115,4 @@ export async function POST(request: Request) {
             awaiting_reply: 0,
         },
     }, { status: 201 });
-}
-
-export async function upsertTags(
-    env: CloudflareEnv,
-    contactId: number,
-    tags: { name: string; color: string }[]
-): Promise<{ id: number; name: string; color: string }[]> {
-    if (tags.length === 0) return [];
-    const saved: { id: number; name: string; color: string }[] = [];
-    for (const tag of tags) {
-        const trimmed = tag.name.trim();
-        if (!trimmed) continue;
-        let row = await env.DB
-            .prepare('SELECT id, name, color FROM tag WHERE LOWER(name) = LOWER(?)')
-            .bind(trimmed)
-            .first<{ id: number; name: string; color: string }>();
-        if (!row) {
-            await env.DB
-                .prepare('INSERT OR IGNORE INTO tag (name, color) VALUES (?, ?)')
-                .bind(trimmed, tag.color)
-                .run();
-            row = await env.DB
-                .prepare('SELECT id, name, color FROM tag WHERE LOWER(name) = LOWER(?)')
-                .bind(trimmed)
-                .first<{ id: number; name: string; color: string }>();
-        }
-        if (!row) continue;
-        await env.DB
-            .prepare('INSERT OR IGNORE INTO contact_tag (contact_id, tag_id) VALUES (?, ?)')
-            .bind(contactId, row.id)
-            .run();
-        saved.push(row);
-    }
-    return saved;
 }

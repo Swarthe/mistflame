@@ -1,4 +1,5 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
+import { parseAddrList } from '@/lib/server/validation';
 
 // Forwarding creates a fresh draft thread under the target contact ([id] in
 // the URL), with the source message baked into the body as a plain-text
@@ -46,7 +47,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     try {
         const { env } = await getCloudflareContext({ async: true });
 
-        const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
+        const validAddrs = parseAddrList(env.SEND_ADDRS);
         if (!validAddrs.includes(sender)) {
             return Response.json({ ok: false, error: 'Invalid sender address.' }, { status: 400 });
         }

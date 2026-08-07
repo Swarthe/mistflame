@@ -533,18 +533,9 @@ export default function OutreachPage() {
             body: JSON.stringify({ sender, subject: subject.trim() || null, body, body_format: 'markdown', cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null }),
         });
         if (res.ok) {
-            setEmails(prev => {
-                const updated = prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, body_format: 'markdown' as const, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null } : e);
-                const awaiting = updated.some(e => {
-                    const threadEmails = updated.filter(x => x.thread_id === e.thread_id);
-                    const last = threadEmails.reduce((a, b) => b.id > a.id ? b : a);
-                    return last.id === e.id && e.sender === null;
-                });
-                if (selectedId !== null) {
-                    setContacts(prev => prev.map(c => c.id === selectedId ? { ...c, awaiting_reply: awaiting ? 1 : 0 } : c));
-                }
-                return updated;
-            });
+            // Only the row itself changes: an edit cannot alter parent_id or
+            // null the sender, so the contact's awaiting_reply is unaffected.
+            setEmails(prev => prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, body_format: 'markdown' as const, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null } : e));
         } else {
             const data = (await res.json()) as { error?: string };
             throw new Error(data.error ?? 'Failed to save');

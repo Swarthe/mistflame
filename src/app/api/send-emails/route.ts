@@ -1,7 +1,7 @@
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import { encodeHeaderText, extractMessageIds, rfc2822Date } from '@/lib/mime';
+import { encodeHeaderText, extractMessageIds, generateMessageId, rfc2822Date } from '@/lib/mime';
 import { renderMarkdown } from '@/lib/markdown';
-import { isValidEmail } from '@/app/api/contacts/route';
+import { isValidEmail, parseAddrList } from '@/lib/server/validation';
 
 interface PendingEmail {
     id: number;
@@ -36,8 +36,14 @@ interface DbAttachment {
     r2_key: string;
 }
 
-const generateMessageId = (domain: string) =>
-    `${Date.now()}.${Math.random().toString(36).slice(2)}@${domain}`;
+// A draft is pending once it is outgoing, unsent, and not a reply to a parent
+// that has not itself been sent. Shared by the GET count and the send query,
+// so the badge can never disagree with what a send would pick up. Requires
+// `email e` with `LEFT JOIN email p ON p.id = e.parent_id` in scope.
+const PENDING_WHERE = `
+    WHERE e.sender IS NOT NULL AND e.sent_at IS NULL
+      AND (e.parent_id IS NULL OR p.sent_at IS NOT NULL)
+`;
 
 /**
  * RFC 2045 token "/" token. Attachment content types come from the uploader's
@@ -196,9 +202,7 @@ export async function GET() {
         .prepare(`
             SELECT COUNT(*) AS count FROM email e
             LEFT JOIN email p ON p.id = e.parent_id
-            WHERE e.sender IS NOT NULL AND e.sent_at IS NULL
-              AND (e.parent_id IS NULL OR p.sent_at IS NOT NULL)
-        `)
+        ` + PENDING_WHERE)
         .first<{ count: number }>();
     return Response.json({ ok: true, count: row?.count ?? 0 });
 }
@@ -213,7 +217,7 @@ export async function POST(request: Request) {
 
     const { env } = await getCloudflareContext({ async: true });
 
-    const validAddrs = (env.SEND_ADDRS ?? '').split(',').map((a: string) => a.trim()).filter(Boolean);
+    const validAddrs = parseAddrList(env.SEND_ADDRS);
     const senderName = env.ORG_NAME || 'Mistflame';
 
     const baseQuery = `
@@ -229,9 +233,7 @@ export async function POST(request: Request) {
         FROM email e
         JOIN contact c ON e.contact_id = c.id
         LEFT JOIN email p ON p.id = e.parent_id
-        WHERE e.sender IS NOT NULL AND e.sent_at IS NULL
-          AND (e.parent_id IS NULL OR p.sent_at IS NOT NULL)
-    `;
+    ` + PENDING_WHERE;
 
     const { results: emails } = emailId !== null
         ? await env.DB.prepare(baseQuery + ' AND e.id = ?').bind(emailId).all<PendingEmail>()
