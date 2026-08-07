@@ -55,8 +55,9 @@ Email Workers (send and receive).
 - Delivery failures (bounces) are threaded onto the message that failed rather
   than filed under a mailer-daemon contact
 - Remote images blocked until you ask for them, so tracking pixels do not fire
-- Optional notification email on arrival (`NOTIFY_ADDRS`) and a configurable
-  inbound rate limit (`RATE_LIMIT_MAX`)
+- Optional notification email on arrival (`NOTIFY_ADDRS`), routable per
+  receiving address (`NOTIFY_MAP`), and a configurable inbound rate limit
+  (`RATE_LIMIT_MAX`)
 
 **Access**
 - Password-protected, any number of simultaneous sessions, with an optional
@@ -160,6 +161,7 @@ changes needed to customise the app for a new deployment.
 | Var | Default | Purpose |
 |---|---|---|
 | `NOTIFY_ADDRS` | `""` | Comma-separated list of addresses to email when a new inbound message arrives; leave empty to disable |
+| `NOTIFY_MAP` | unset | Optional JSON object routing notifications by receiving address: each key is one of your inbound addresses, each value a list of addresses to notify. An address with no entry notifies all `NOTIFY_ADDRS`; an empty list mutes it. Malformed JSON falls back to notifying everyone, with a warning line in the notification |
 | `RATE_LIMIT_MAX` | `"30"` | Soft limit on inbound emails per window (`0` = disabled); requires the `KV` binding. Enforced via a KV counter; not a hard guarantee, but effective against sustained spam |
 | `RATE_LIMIT_WINDOW_MINUTES` | `"60"` | Window length in minutes for the rate limit |
 

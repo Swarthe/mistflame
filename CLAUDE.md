@@ -42,6 +42,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 | Var | Purpose |
 |---|---|
 | `NOTIFY_ADDRS` | Comma-separated addresses to notify on inbound email (empty = disabled) |
+| `NOTIFY_MAP` | Optional JSON object routing notifications by receiving address: key = inbound (envelope recipient) address, value = list of addresses to notify. No entry for an address = all `NOTIFY_ADDRS`; empty list = muted. Malformed JSON falls back to all `NOTIFY_ADDRS` with a warning line in the notification body |
 | `RATE_LIMIT_MAX` | Soft limit on inbound emails per window (`0` = disabled); requires `KV` binding. Enforced via a KV counter (read-increment-write); not atomically exact, but effective against sustained spam |
 | `RATE_LIMIT_WINDOW_MINUTES` | Window length in minutes for the rate limit (default `60`) |
 
@@ -156,7 +157,7 @@ The `email` table uses two columns to encode email state; get these wrong and ev
 - Inbound attachments are silently dropped if they exceed 10 MB or have no content (`!att.content`).
 - Related/inline parts (`att.related`) **are** stored, with `content_id` (angle brackets stripped) and `inline = 1`, so `cid:` images in `body_html` resolve. A related part is only marked `inline` once its content ID is confirmed to appear in `body_html`; otherwise it stays `inline = 0` so it remains visible as a file instead of vanishing from the UI.
 - The parsed `To:` and `Cc:` header address lists are stored in `to_addrs` and `cc` via `joinAddrs`, which drops trailing addresses once the joined string exceeds `MAX_ADDR_LIST` (2000 chars), so a pathological header cannot bloat the row. The envelope recipient (`message.to`) stays in `recipient` and is what locks the reply sender.
-- Notification emails (one per `NOTIFY_ADDRS`) are sent with a 500-character body preview. Notification failures are caught and never affect inbound processing.
+- Notification emails are sent with a 500-character body preview, one per resolved notify address. `resolveNotifyAddrs` picks the list: the `NOTIFY_MAP` entry for the envelope recipient (keys matched case-insensitively) when one exists, otherwise all of `NOTIFY_ADDRS`. A malformed map deliberately falls back to notifying everyone, with a `[mistflame]` warning line prepended to the body: a config typo must over-notify rather than silently drop notifications. The rate-limit warning email ignores the map and always goes to all `NOTIFY_ADDRS`, since it concerns the whole pipeline rather than one address. Notification failures are caught and never affect inbound processing.
 - The rate limiter uses a KV counter keyed by time-bucket (`rate:inbound:{bucket}`). It warns once per bucket via email when the limit is reached, then silently discards. The counter is not atomically exact (read-increment-write), but effective against sustained spam.
 
 ## Build patch (`scripts/patch-opennext.mjs`)

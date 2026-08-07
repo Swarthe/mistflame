@@ -12,6 +12,7 @@ interface Env {
     EMAIL_SENDER: SendEmail;
     KV?: KVNamespace;
     NOTIFY_ADDRS?: string;
+    NOTIFY_MAP?: string;
     RATE_LIMIT_MAX?: string;
     RATE_LIMIT_WINDOW_MINUTES?: string;
 }
@@ -33,6 +34,42 @@ const MAX_REFS_LENGTH = 2000;
 // bloat the row; trailing addresses are dropped once the joined string
 // exceeds it.
 const MAX_ADDR_LIST = 2000;
+
+// NOTIFY_MAP routes notifications by receiving address: a JSON object mapping
+// an inbound address (the envelope recipient, matched case-insensitively) to
+// the list of addresses to notify. An address with no entry notifies all of
+// NOTIFY_ADDRS, so the map only needs entries that narrow the default; an
+// empty list mutes that address. A malformed map falls back to notifying
+// everyone, with a warning line in the notification body, because a config
+// typo must over-notify rather than silently drop notifications.
+const resolveNotifyAddrs = (
+    env: Env,
+    recipient: string,
+): { addrs: string[]; warning: string | null } => {
+    const all = (env.NOTIFY_ADDRS ?? '').split(',').map(a => a.trim()).filter(Boolean);
+    const raw = env.NOTIFY_MAP?.trim();
+    if (!raw) return { addrs: all, warning: null };
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return { addrs: all, warning: 'NOTIFY_MAP is not valid JSON; notifying all NOTIFY_ADDRS.' };
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        return { addrs: all, warning: 'NOTIFY_MAP is not a JSON object; notifying all NOTIFY_ADDRS.' };
+    }
+    const map: Record<string, string[]> = {};
+    for (const [key, value] of Object.entries(parsed)) {
+        if (!Array.isArray(value) || value.some(v => typeof v !== 'string')) {
+            return { addrs: all, warning: `NOTIFY_MAP entry for "${key}" is not a list of strings; notifying all NOTIFY_ADDRS.` };
+        }
+        map[key.trim().toLowerCase()] = value.map(a => a.trim()).filter(Boolean);
+    }
+    const entry = map[recipient];
+    return entry !== undefined
+        ? { addrs: entry, warning: null }
+        : { addrs: all, warning: null };
+};
 
 const joinAddrs = (list?: { address?: string }[]) => {
     const addrs = (list ?? [])
@@ -271,7 +308,8 @@ export default {
                 .run();
         }
 
-        const notifyAddrs = (env.NOTIFY_ADDRS ?? '').split(',').map(a => a.trim()).filter(Boolean);
+        const { addrs: notifyAddrs, warning: notifyWarning } =
+            resolveNotifyAddrs(env, recipient);
         if (notifyAddrs.length === 0) return;
 
         const safeSubject = (subject ?? '(no subject)').replace(/[\r\n]/g, ' ');
@@ -300,6 +338,7 @@ export default {
                 'Content-Type: text/plain; charset=UTF-8',
                 'Content-Transfer-Encoding: 8bit',
                 '',
+                ...(notifyWarning ? [`[mistflame] ${notifyWarning}`, ''] : []),
                 `From:    ${displayFrom}`,
                 `To:      ${recipient}`,
                 `Subject: ${safeSubject}`,

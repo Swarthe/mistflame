@@ -24,6 +24,15 @@ preview_id = "local-rate-limit"
 
 [vars]
 NOTIFY_ADDRS = ""
+# Optional JSON map routing notifications by receiving address: each key is
+# one of your inbound addresses, each value the list of addresses to notify.
+# An address with no entry notifies all NOTIFY_ADDRS; an empty list mutes it.
+# NOTIFY_MAP = '''
+# {
+#     "alice@example.com": ["alice@gmail.com"],
+#     "bob@example.com": ["bob@gmail.com"]
+# }
+# '''
 # Maximum inbound emails accepted in the time window (0 = disabled).
 RATE_LIMIT_MAX = "30"
 # Time window in minutes.
