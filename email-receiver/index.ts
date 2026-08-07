@@ -92,7 +92,16 @@ export default {
         const rawBuffer = await new Response(message.raw).arrayBuffer();
         const parsed = await new PostalMime().parse(rawBuffer);
 
-        const fromEmail = message.from.toLowerCase();
+        // Contact identity comes from the From: header, not the envelope
+        // sender (message.from): bulk senders put a unique VERP bounce
+        // address in the envelope, which used to create a contact per
+        // sender, or per message for SES. Standard clients key on the
+        // header too. The envelope remains as a fallback for a missing
+        // or malformed header.
+        const headerFrom = parsed.from?.address?.trim().toLowerCase() ?? '';
+        const fromEmail = EMAIL_RE.test(headerFrom)
+            ? headerFrom
+            : message.from.toLowerCase();
         const msgId = parsed.messageId ? parsed.messageId.replace(/^<|>$/g, '').trim() : null;
         const rawInReplyTo = parsed.inReplyTo?.trim() ?? null;
         const inReplyTo = rawInReplyTo
