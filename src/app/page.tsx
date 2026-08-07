@@ -70,6 +70,11 @@ export default function OutreachPage() {
     const [pendingCount, setPendingCount] = useState<number | null>(null);
     const [sendResult, setSendResult] = useState<SendResult | null>(null);
 
+    // How many other sessions the presence table saw inside its window,
+    // reported alongside the revision on every poll. Zero also covers
+    // "unknown" (a database predating migration 008): no notice either way.
+    const [activeOthers, setActiveOthers] = useState(0);
+
     const search = useEmailSearch(apiFetch);
 
     // Last revision the currently held data was read against, and when the last
@@ -138,8 +143,11 @@ export default function OutreachPage() {
 
     const fetchRevision = (): Promise<number | null> =>
         apiFetch('/api/revision')
-            .then(r => json<{ revision?: number | null }>(r))
-            .then(data => data.revision ?? null);
+            .then(r => json<{ revision?: number | null; activeOthers?: number | null }>(r))
+            .then(data => {
+                setActiveOthers(data.activeOthers ?? 0);
+                return data.revision ?? null;
+            });
 
     const refreshContacts = () => {
         apiFetch('/api/contacts')
@@ -659,6 +667,11 @@ export default function OutreachPage() {
                     {config?.orgName && <><span className="text-white/30 mx-1.5">—</span><span className="text-white">{config.orgName}</span></>}
                 </h1>
                 <div className="flex items-center gap-3">
+                    {activeOthers > 0 && (
+                        <span className="text-sm text-[#ffd54f]/65 font-sans" title="Someone else is logged in and using the app right now">
+                            {activeOthers} other session{activeOthers === 1 ? '' : 's'} active
+                        </span>
+                    )}
                     <button onClick={openSendModal} disabled={pendingCount === 0} className={`text-sm border px-4 py-1.5 transition-colors font-sans ${pendingCount === 0 ? 'text-[#ffd54f]/30 border-[#ffd54f]/10 cursor-not-allowed' : 'text-[#ffd54f]/70 hover:text-[#ffd54f] border-[#ffd54f]/25 hover:border-[#ffd54f]/55 cursor-pointer'}`}>
                         Send emails{pendingCount ? ` (${pendingCount})` : ''}
                     </button>

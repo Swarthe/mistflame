@@ -100,6 +100,16 @@ CREATE TABLE meta (
 
 INSERT INTO meta (key, value) VALUES ('revision', 1);
 
+-- Session presence, one row per active session token (hashed). Refreshed from
+-- the /api/revision poll so the header can say when another session is using
+-- the app at the same time. Deliberately NO revision triggers: presence rows
+-- are written by the poll itself, so bumping the revision here would make
+-- every poll read as a data change and force a full refetch on every tick.
+CREATE TABLE presence (
+    token_hash TEXT    PRIMARY KEY, -- SHA-256 of the session token, never the token itself
+    last_seen  INTEGER NOT NULL     -- unix seconds
+);
+
 CREATE TRIGGER trg_email_insert_revision AFTER INSERT ON email
 BEGIN UPDATE meta SET value = value + 1 WHERE key = 'revision'; END;
 CREATE TRIGGER trg_email_update_revision AFTER UPDATE ON email

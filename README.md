@@ -60,7 +60,8 @@ Email Workers (send and receive).
 
 **Access**
 - Password-protected, any number of simultaneous sessions, with an optional
-  "Remember me"
+  "Remember me"; the header shows a notice while another session is active at
+  the same time
 
 See [Security](#security) for how HTML email, remote images and authentication
 are handled.
@@ -226,12 +227,14 @@ npx wrangler d1 execute mistflame-db --remote --file db/migrations/003-revision.
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/004-email-fts.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/005-reply-headers.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/006-recipients.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/007-body-format.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/008-presence.sql
 ```
 
-002 to 004 use `IF NOT EXISTS` throughout and are safe to reapply, so an already
-current database is left alone. 001, 005 and 006 are not: SQLite has no
-`ADD COLUMN IF NOT EXISTS`, so they error rather than doing nothing. Check
-whether they are needed with
+002 to 004 and 008 use `IF NOT EXISTS` throughout and are safe to reapply, so
+an already current database is left alone. 001 and 005 to 007 are not: SQLite
+has no `ADD COLUMN IF NOT EXISTS`, so they error rather than doing nothing.
+Check whether they are needed with
 `npx wrangler d1 execute mistflame-db --remote --command "PRAGMA table_info(email)"`.
 
 Swap `--remote` for `--local` and the database name for the binding name `DB` to
@@ -361,6 +364,10 @@ currently implemented.
   refetch happens once a minute regardless, so a write path that ever lands
   without a trigger behind it degrades to a slow refresh rather than a stuck
   view
+- The same poll doubles as a presence heartbeat: the `presence` table stores a
+  hash of each session token with a last-seen time, and the header shows
+  "n other sessions active" while any besides your own were seen in the last
+  30 seconds. Sessions are anonymous, so the notice counts rather than names
 - Emails received before HTML rendering existed have raw markup stored in their
   body column. `scripts/backfill-html-bodies.mjs` converts those rows into a
   readable text body plus the HTML fragment; it reads a D1 dump and writes SQL
