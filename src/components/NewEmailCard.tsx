@@ -2,11 +2,11 @@
 
 import { useState, useRef } from 'react';
 import type { Contact, EmailRecord } from '@/lib/types';
-import { formatSize } from '@/lib/format';
 import { ReplyPreview } from '@/components/ReplyPreview';
 import { RecipientField } from '@/components/RecipientField';
 import { BodyEditor } from '@/components/BodyEditor';
-import { inputCls, btnPrimary, btnGhost } from '@/components/styles';
+import { AttachmentChip } from '@/components/AttachmentChip';
+import { inputCls, selectCls, lockedSenderCls, btnPrimary, btnGhost, btnMuted } from '@/components/styles';
 
 export function NewEmailCard({ replyTo, contactName, contactEmail, contacts, orgName, sendAddrs, threadSender, initialCc, saving, onSave, onCancel }: {
     replyTo: EmailRecord | null;
@@ -38,12 +38,17 @@ export function NewEmailCard({ replyTo, contactName, contactEmail, contacts, org
     const [bcc, setBcc] = useState('');
     const [body, setBody] = useState('');
     const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+    // CC and BCC stay hidden until asked for, so the common composer is a row
+    // shorter. A field that arrives with content (Reply All prefill) opens
+    // visible, and once revealed a field stays for the composer's lifetime.
+    const [showCc, setShowCc] = useState(initialCc !== '');
+    const [showBcc, setShowBcc] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const addrLocked = effectiveThreadSender !== null;
     const effectiveAddr = addrLocked ? effectiveThreadSender! : senderAddr;
     const sender = effectiveAddr || null;
-    const cardCls = 'flex flex-col gap-3 p-4 border ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]';
+    const cardCls = 'flex flex-col gap-3 p-4 border ml-4 sm:ml-8 border-gold/30 bg-gold/[0.08]';
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -56,11 +61,11 @@ export function NewEmailCard({ replyTo, contactName, contactEmail, contacts, org
         <div className={cardCls}>
             {replyTo && <ReplyPreview email={replyTo} contactName={contactName} orgName={orgName} />}
             <div className="flex flex-col gap-2">
-                <div className="flex gap-2 items-start">
+                <div className="flex flex-col sm:flex-row gap-2 sm:items-start">
                     {addrLocked ? (
-                        <span className="w-48 shrink-0 text-sm font-sans text-white/35 flex items-center border border-white/10 bg-white/[0.04] px-3 py-2.5">{effectiveThreadSender}</span>
+                        <div className={lockedSenderCls}>{effectiveThreadSender}</div>
                     ) : (
-                        <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={senderAddr} onChange={e => setSenderAddr(e.target.value)}>
+                        <select className={selectCls} value={senderAddr} onChange={e => setSenderAddr(e.target.value)}>
                             {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
                         </select>
                     )}
@@ -71,46 +76,55 @@ export function NewEmailCard({ replyTo, contactName, contactEmail, contacts, org
                         onChange={setToAddrs}
                         contacts={contacts}
                     />
+                    {(!showCc || !showBcc) && (
+                        <div className="flex gap-2 shrink-0 sm:mt-3">
+                            {!showCc && <button className={btnMuted} onClick={() => setShowCc(true)}>CC</button>}
+                            {!showBcc && <button className={btnMuted} onClick={() => setShowBcc(true)}>BCC</button>}
+                        </div>
+                    )}
                 </div>
-                <div className="flex gap-2 items-start">
-                    <RecipientField
-                        label="CC"
-                        value={cc}
-                        onChange={setCc}
-                        contacts={contacts}
-                        placeholder="CC recipients"
-                    />
-                    <RecipientField
-                        label="BCC"
-                        value={bcc}
-                        onChange={setBcc}
-                        contacts={contacts}
-                        placeholder="BCC recipients"
-                    />
-                </div>
+                {(showCc || showBcc) && (
+                    <div className="flex flex-col sm:flex-row gap-2 sm:items-start">
+                        {showCc && (
+                            <RecipientField
+                                label="CC"
+                                value={cc}
+                                onChange={setCc}
+                                contacts={contacts}
+                                placeholder="CC recipients"
+                            />
+                        )}
+                        {showBcc && (
+                            <RecipientField
+                                label="BCC"
+                                value={bcc}
+                                onChange={setBcc}
+                                contacts={contacts}
+                                placeholder="BCC recipients"
+                            />
+                        )}
+                    </div>
+                )}
             </div>
             <input className={inputCls} placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} />
             <BodyEditor
                 value={body}
                 onChange={setBody}
                 placeholder="Email body *"
+                onAttach={() => fileInputRef.current?.click()}
             />
-            <div className="flex flex-wrap items-center gap-2">
-                {pendingFiles.map((file, idx) => (
-                    <div key={idx} className="flex items-center gap-1.5 text-xs text-white/60 bg-white/5 border border-white/10 px-2 py-1 font-sans">
-                        <span>{file.name}</span>
-                        <span className="text-white/35">{formatSize(file.size)}</span>
-                        <button onClick={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))} className="text-white/30 hover:text-red-400 transition-colors cursor-pointer ml-0.5 leading-none">✕</button>
-                    </div>
-                ))}
-                <button
-                    onClick={() => fileInputRef.current?.click()}
-                    className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans"
-                >
-                    Attach
-                </button>
-                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
-            </div>
+            <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+            {pendingFiles.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                    {pendingFiles.map((file, idx) => (
+                        <AttachmentChip
+                            key={idx}
+                            att={{ filename: file.name, size: file.size }}
+                            onDelete={() => setPendingFiles(prev => prev.filter((_, i) => i !== idx))}
+                        />
+                    ))}
+                </div>
+            )}
             <div className="flex gap-2">
                 <button className={btnPrimary} onClick={() => onSave(sender, subject, body, cc, toAddrs, bcc, pendingFiles)} disabled={saving || !body.trim()}>
                     {saving ? 'Saving…' : 'Add Email'}

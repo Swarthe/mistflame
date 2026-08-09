@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { Bold, Italic, Code, Link, List, ListOrdered, TextQuote, CircleHelp } from 'lucide-react';
+import { Bold, Italic, Code, Link, List, ListOrdered, TextQuote, CircleHelp, Paperclip } from 'lucide-react';
 import { useMarkdownHtml } from '@/hooks/useMarkdownHtml';
 import { toggleWrap, togglePrefix, continueList, type EditResult } from '@/lib/markdown-edit';
 import { inputCls } from '@/components/styles';
@@ -16,14 +16,18 @@ import { inputCls } from '@/components/styles';
 
 const toolBtn = 'p-1 border border-white/15 text-white/55 hover:text-white hover:border-white/40 transition-colors cursor-pointer';
 const tabBtn = (active: boolean) =>
-    `text-xs px-2 py-0.5 border transition-colors cursor-pointer font-sans ${active
+    `text-xs px-2 py-0.5 border transition-colors cursor-pointer ${active
         ? 'text-white/85 border-white/45'
         : 'text-white/40 hover:text-white/65 border-white/20 hover:border-white/40'}`;
 
-export function BodyEditor({ value, onChange, placeholder }: {
+export function BodyEditor({ value, onChange, placeholder, onAttach, attachBusy }: {
     value: string;
     onChange: (v: string) => void;
     placeholder?: string;
+    /** Renders a paperclip in the toolbar; the parent owns the hidden file
+     *  input and the attachment chip row. */
+    onAttach?: () => void;
+    attachBusy?: boolean;
 }) {
     const [previewing, setPreviewing] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -94,6 +98,14 @@ export function BodyEditor({ value, onChange, placeholder }: {
                             <button className={toolBtn} onClick={() => withSelection((s, e) => togglePrefix(value, s, e, () => '- ', /^- /))} title="Bulleted list"><List className="w-3.5 h-3.5" /></button>
                             <button className={toolBtn} onClick={() => withSelection((s, e) => togglePrefix(value, s, e, i => `${i + 1}. `, /^\d+[.)] /))} title="Numbered list"><ListOrdered className="w-3.5 h-3.5" /></button>
                             <button className={toolBtn} onClick={() => withSelection((s, e) => togglePrefix(value, s, e, () => '> ', /^> /))} title="Quote"><TextQuote className="w-3.5 h-3.5" /></button>
+                            {onAttach && (
+                                <button
+                                    className="p-1 ml-1 text-white/55 hover:text-white transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                                    onClick={onAttach}
+                                    disabled={attachBusy}
+                                    title={attachBusy ? 'Uploading…' : 'Attach a file'}
+                                ><Paperclip className="w-3.5 h-3.5" /></button>
+                            )}
                             <a
                                 className="group relative flex items-center text-white/30 hover:text-white/60 transition-colors ml-1"
                                 href="https://commonmark.org/help/"
@@ -103,7 +115,7 @@ export function BodyEditor({ value, onChange, placeholder }: {
                                 <CircleHelp className="w-3.5 h-3.5" />
                                 {/* Styled rather than a title attribute so it
                                     shows without the browser's hover delay. */}
-                                <span className="absolute bottom-full left-0 mb-1.5 hidden group-hover:block whitespace-nowrap bg-black border border-white/20 text-white/75 text-xs px-2 py-1 font-sans pointer-events-none">
+                                <span className="absolute bottom-full left-0 mb-1.5 hidden group-hover:block whitespace-nowrap bg-black border border-white/20 text-white/75 text-xs px-2 py-1 pointer-events-none">
                                     Markdown syntax is supported; click for a reference
                                 </span>
                             </a>

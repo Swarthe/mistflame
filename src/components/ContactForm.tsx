@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import type { Contact, Tag } from '@/lib/types';
 import { isValidEmail } from '@/lib/format';
 import { TagChip } from '@/components/TagChip';
-import { inputCls, btnPrimary, btnGhost } from '@/components/styles';
+import { inputCls, inputErrorCls, btnPrimary, btnGhost } from '@/components/styles';
 
 export function ContactForm({ value, onChange, onSave, onCancel, saving, saveError }: {
     value: Partial<Contact>;
@@ -48,14 +48,14 @@ export function ContactForm({ value, onChange, onSave, onCancel, saving, saveErr
                 <input className={inputCls} placeholder="Name *" {...field('name')} />
                 <div className="flex flex-col gap-1">
                     <input
-                        className={`${inputCls}${emailError ? ' border-red-400/60' : ''}`}
+                        className={emailError ? inputErrorCls : inputCls}
                         placeholder="Email *"
                         type="email"
                         {...field('email')}
                         onFocus={() => setEmailError(null)}
                         onBlur={() => setEmailError(value.email && !isValidEmail(value.email) ? 'Invalid email address' : null)}
                     />
-                    {emailError && <p className="text-xs text-red-400 font-sans">{emailError}</p>}
+                    {emailError && <p className="text-xs text-red-400">{emailError}</p>}
                 </div>
             </div>
             <textarea
@@ -93,7 +93,7 @@ export function ContactForm({ value, onChange, onSave, onCancel, saving, saveErr
                     </div>
                 )}
             </div>
-            {saveError && <p className="text-xs text-red-400 font-sans">{saveError}</p>}
+            {saveError && <p className="text-xs text-red-400">{saveError}</p>}
             <div className="flex gap-2">
                 <button className={btnPrimary} onClick={onSave} disabled={saving || !value.name?.trim() || !isValidEmail(value.email ?? '')}>
                     {saving ? 'Saving…' : 'Save'}

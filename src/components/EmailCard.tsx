@@ -11,7 +11,7 @@ import { ReplyPreview } from '@/components/ReplyPreview';
 import { AttachmentChip } from '@/components/AttachmentChip';
 import { RecipientField } from '@/components/RecipientField';
 import { BodyEditor } from '@/components/BodyEditor';
-import { inputCls, btnPrimary, btnGhost, btnDanger } from '@/components/styles';
+import { inputCls, selectCls, lockedSenderCls, btnPrimary, btnGhost, btnDanger, btnLink, btnGold, btnMuted } from '@/components/styles';
 
 export function EmailCard({ email, contactName, contactEmail, contacts, parentEmail, orgName, sendAddrs, threadSender, senderEditable, highlighted, onReply, onReplyAll, onForward, onDelete, onEdit, onSend, onAttachmentUpload, onAttachmentDelete, onEditingChange }: {
     email: EmailRecord;
@@ -55,7 +55,12 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
     // contact), so seeding the input from the row is correct.
     const [editToAddrs, setEditToAddrs] = useState(email.to_addrs ?? '');
     const [editBcc, setEditBcc] = useState(email.bcc ?? '');
+    // CC and BCC stay hidden until asked for (see NewEmailCard); a draft that
+    // already carries one opens with that field visible.
+    const [showCc, setShowCc] = useState(!!email.cc);
+    const [showBcc, setShowBcc] = useState(!!email.bcc);
     const [editSaving, setEditSaving] = useState(false);
+    const [editError, setEditError] = useState<string | null>(null);
     const [sending, setSending] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [uploadError, setUploadError] = useState<string | null>(null);
@@ -93,9 +98,12 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
 
     const saveEdit = async () => {
         setEditSaving(true);
+        setEditError(null);
         try {
             await onEdit(editSender, editSubject, editBody, editCc, editToAddrs, editBcc);
             setEditing(false);
+        } catch (err) {
+            setEditError(err instanceof Error && err.message ? err.message : 'Failed to save');
         } finally {
             setEditSaving(false);
         }
@@ -103,15 +111,19 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
 
     const cancelEdit = () => {
         setEditing(false);
+        setEditError(null);
         setEditSenderAddr(email.sender ?? sendAddrs[0] ?? '');
         setEditSubject(email.subject ?? '');
         setEditBody(email.body);
         setEditCc(email.cc ?? '');
         setEditToAddrs(email.to_addrs ?? '');
         setEditBcc(email.bcc ?? '');
+        setShowCc(!!email.cc);
+        setShowBcc(!!email.bcc);
     };
 
     const handleSend = async () => {
+        if (!confirm('Send this email now?')) return;
         setSending(true);
         try {
             await onSend();
@@ -120,19 +132,18 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
         }
     };
 
-    const displayIsUs = isUs;
     // The outline marks the card a search result jumped to, and fades on its own.
-    const cardCls = `flex flex-col gap-2 p-4 border transition-shadow ${displayIsUs ? 'ml-8 border-[#ffd54f]/30 bg-[#ffd54f]/[0.08]' : 'mr-8 border-white/20'}${highlighted ? ' shadow-[0_0_0_2px_#ffd54f]' : ''}`;
+    const cardCls = `flex flex-col gap-2 p-4 border transition-shadow ${isUs ? 'ml-4 sm:ml-8 border-gold/30 bg-gold/[0.08]' : 'mr-4 sm:mr-8 border-white/20'}${highlighted ? ' shadow-[0_0_0_2px_var(--color-gold)]' : ''}`;
 
     if (editing) {
         return (
             <div id={`email-${email.id}`} className={`${cardCls} gap-3`}>
                 <div className="flex flex-col gap-2">
-                    <div className="flex gap-2 items-start">
+                    <div className="flex flex-col sm:flex-row gap-2 sm:items-start">
                         {senderLocked ? (
-                            <div className="w-48 shrink-0 text-sm font-sans text-white/35 border border-white/10 bg-white/[0.04] px-3 py-2.5">{threadSender}</div>
+                            <div className={lockedSenderCls}>{threadSender}</div>
                         ) : (
-                            <select className="w-48 shrink-0 bg-white/[0.07] border border-white/15 text-white text-sm px-3 py-2.5 focus:outline-none focus:border-white/40 font-sans" value={editSenderAddr} onChange={e => setEditSenderAddr(e.target.value)}>
+                            <select className={selectCls} value={editSenderAddr} onChange={e => setEditSenderAddr(e.target.value)}>
                                 {sendAddrs.map(addr => <option key={addr} value={addr} style={{ color: 'white' }}>{addr}</option>)}
                             </select>
                         )}
@@ -143,23 +154,35 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
                             onChange={setEditToAddrs}
                             contacts={contacts}
                         />
+                        {(!showCc || !showBcc) && (
+                            <div className="flex gap-2 shrink-0 sm:mt-3">
+                                {!showCc && <button className={btnMuted} onClick={() => setShowCc(true)}>CC</button>}
+                                {!showBcc && <button className={btnMuted} onClick={() => setShowBcc(true)}>BCC</button>}
+                            </div>
+                        )}
                     </div>
-                    <div className="flex gap-2 items-start">
-                        <RecipientField
-                            label="CC"
-                            value={editCc}
-                            onChange={setEditCc}
-                            contacts={contacts}
-                            placeholder="CC recipients"
-                        />
-                        <RecipientField
-                            label="BCC"
-                            value={editBcc}
-                            onChange={setEditBcc}
-                            contacts={contacts}
-                            placeholder="BCC recipients"
-                        />
-                    </div>
+                    {(showCc || showBcc) && (
+                        <div className="flex flex-col sm:flex-row gap-2 sm:items-start">
+                            {showCc && (
+                                <RecipientField
+                                    label="CC"
+                                    value={editCc}
+                                    onChange={setEditCc}
+                                    contacts={contacts}
+                                    placeholder="CC recipients"
+                                />
+                            )}
+                            {showBcc && (
+                                <RecipientField
+                                    label="BCC"
+                                    value={editBcc}
+                                    onChange={setEditBcc}
+                                    contacts={contacts}
+                                    placeholder="BCC recipients"
+                                />
+                            )}
+                        </div>
+                    )}
                 </div>
                 <input
                     className={inputCls}
@@ -170,31 +193,29 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
                 <BodyEditor
                     value={editBody}
                     onChange={setEditBody}
+                    onAttach={() => fileInputRef.current?.click()}
+                    attachBusy={uploading}
                 />
+                <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
+                {(email.attachments.length > 0 || uploadError) && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        {email.attachments.map(att => (
+                            <AttachmentChip
+                                key={att.id}
+                                att={att}
+                                href={`/api/contacts/${email.contact_id}/emails/${email.id}/attachments/${att.id}`}
+                                onDelete={() => onAttachmentDelete(att.id)}
+                            />
+                        ))}
+                        {uploadError && <span className="text-xs text-red-400">{uploadError}</span>}
+                    </div>
+                )}
                 <div className="flex flex-wrap items-center gap-2">
-                    {email.attachments.map(att => (
-                        <AttachmentChip
-                            key={att.id}
-                            att={att}
-                            href={`/api/contacts/${email.contact_id}/emails/${email.id}/attachments/${att.id}`}
-                            onDelete={() => onAttachmentDelete(att.id)}
-                        />
-                    ))}
-                    <button
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={uploading}
-                        className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans disabled:opacity-40"
-                    >
-                        {uploading ? 'Uploading…' : 'Attach'}
-                    </button>
-                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileChange} />
-                    {uploadError && <span className="text-xs text-red-400 font-sans">{uploadError}</span>}
-                </div>
-                <div className="flex gap-2">
                     <button className={btnPrimary} onClick={saveEdit} disabled={editSaving || !editBody.trim()}>
                         {editSaving ? 'Saving…' : 'Save'}
                     </button>
                     <button className={btnGhost} onClick={cancelEdit}>Cancel</button>
+                    {editError && <span className="text-xs text-red-400 break-words">{editError}</span>}
                 </div>
             </div>
         );
@@ -218,11 +239,11 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
     // source shows as plain text, which is what markdown degrades to.
     const textBody = markdownHtml !== null ? (
         <div
-            className="mf-markdown text-sm text-white/85 leading-relaxed font-sans"
+            className="mf-markdown text-sm text-white/85 leading-relaxed"
             dangerouslySetInnerHTML={{ __html: markdownHtml }}
         />
     ) : (
-        <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed font-sans">{bodyMain}</p>
+        <p className="text-sm text-white/85 whitespace-pre-wrap leading-relaxed">{bodyMain}</p>
     );
 
     return (
@@ -234,45 +255,45 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
                 <div className="flex items-baseline gap-2 min-w-0">
                     {/* from_addr marks a third party writing into the contact's
                         thread (a bounce), so name it rather than the contact. */}
-                    <span className="text-sm font-semibold text-white font-sans shrink-0">{isUs ? orgName : email.from_addr ?? contactName}</span>
-                    {isUs && email.sender && <span className="text-xs text-white/35 font-sans truncate">{email.sender}</span>}
+                    <span className="text-sm font-semibold text-white shrink-0 max-w-full truncate">{isUs ? orgName : email.from_addr ?? contactName}</span>
+                    {isUs && email.sender && <span className="text-xs text-white/35 truncate">{email.sender}</span>}
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 ml-auto">
                     {!isUs && email.recipient && (
-                        <span className="text-xs text-white/35 font-sans">→ {email.recipient.split('@')[0]}</span>
+                        <span className="text-xs text-white/35">→ {email.recipient.split('@')[0]}</span>
                     )}
                     {email.sent_at !== null ? (
-                        <span className="text-xs text-white/60 font-sans">{formatDate(email.sent_at)}</span>
+                        <span className="text-xs text-white/60">{formatDate(email.sent_at)}</span>
                     ) : isUs ? (
-                        <button className="text-xs text-[#ffd54f]/60 hover:text-[#ffd54f] border border-[#ffd54f]/25 hover:border-[#ffd54f]/55 px-2 py-0.5 transition-colors cursor-pointer font-sans disabled:opacity-40" onClick={handleSend} disabled={sending || !!(parentEmail && parentEmail.sent_at === null)}>{sending ? 'Sending…' : 'Send'}</button>
+                        <button className="text-xs text-gold/60 hover:text-gold border border-gold/25 hover:border-gold/55 px-2 py-0.5 transition-colors cursor-pointer disabled:opacity-40" onClick={handleSend} disabled={sending || !!(parentEmail && parentEmail.sent_at === null)} title={parentEmail && parentEmail.sent_at === null ? 'The email this replies to has not been sent yet' : undefined}>{sending ? 'Sending…' : 'Send'}</button>
                     ) : null}
                     {email.sent_at === null && (
-                        <button className="text-xs text-white/65 hover:text-white underline underline-offset-2 decoration-white/30 hover:decoration-white/60 transition-colors cursor-pointer font-sans" onClick={() => setEditing(true)}>Edit</button>
+                        <button className={btnLink} onClick={() => setEditing(true)}>Edit</button>
                     )}
                     {/* No reply to a bounce: the composer would address the
                         contact, not the reporting MTA the card names. */}
-                    {!isUs && !email.from_addr && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReply}>+ Reply</button>}
-                    {!isUs && !email.from_addr && !!(email.cc || email.to_addrs) && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onReplyAll}>+ Reply all</button>}
-                    {email.sent_at !== null && <button className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans" onClick={onForward}>Forward</button>}
-                    <button className={btnDanger} onClick={onDelete} title="Delete email">✕</button>
+                    {!isUs && !email.from_addr && <button className={btnGold} onClick={onReply}>+ Reply</button>}
+                    {!isUs && !email.from_addr && !!(email.cc || email.to_addrs) && <button className={btnGold} onClick={onReplyAll}>+ Reply all</button>}
+                    {email.sent_at !== null && <button className={btnGold} onClick={onForward}>Forward</button>}
+                    <button className={`${btnDanger} p-1 -m-1`} onClick={onDelete} title="Delete email">✕</button>
                 </div>
             </div>
             {/* A draft's to_addrs holds the extras beyond the contact; a sent
                 or inbound row's holds the full list. Legacy sent rows have
                 none and show nothing, as before. */}
             {isUs && email.sent_at === null ? (
-                <div className="text-xs text-white/40 font-sans">To: {contactEmail}{email.to_addrs ? `, ${email.to_addrs}` : ''}</div>
+                <div className="text-xs text-white/40 break-words">To: {contactEmail}{email.to_addrs ? `, ${email.to_addrs}` : ''}</div>
             ) : email.to_addrs ? (
-                <div className="text-xs text-white/40 font-sans">To: {email.to_addrs}</div>
+                <div className="text-xs text-white/40 break-words">To: {email.to_addrs}</div>
             ) : null}
             {email.cc && (
-                <div className="text-xs text-white/40 font-sans">CC: {email.cc}</div>
+                <div className="text-xs text-white/40 break-words">CC: {email.cc}</div>
             )}
             {email.bcc && (
-                <div className="text-xs text-white/40 font-sans">BCC: {email.bcc}</div>
+                <div className="text-xs text-white/40 break-words">BCC: {email.bcc}</div>
             )}
             {email.subject && !email.parent_id && (
-                <div className="text-xs text-white/45 font-sans">{email.subject}</div>
+                <div className="text-xs text-white/45 break-words">{email.subject}</div>
             )}
             {showHtml ? (
                 <EmailFrame
@@ -286,14 +307,14 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
                         {quoteContent !== null && (
                             <button
                                 onClick={() => setQuoteExpanded(v => !v)}
-                                className={`text-xs px-1.5 py-0.5 border transition-colors cursor-pointer font-sans ${quoteExpanded ? 'text-white/70 border-white/45' : 'text-white/40 hover:text-white/65 border-white/25 hover:border-white/45'}`}
+                                className={`text-xs px-1.5 py-0.5 border transition-colors cursor-pointer ${quoteExpanded ? 'text-white/70 border-white/45' : 'text-white/40 hover:text-white/65 border-white/25 hover:border-white/45'}`}
                                 title={quoteExpanded ? 'Hide quoted text' : 'Show quoted text'}
                             >···</button>
                         )}
                         {blockedImages > 0 && (
                             <button
                                 onClick={() => setLoadImages(true)}
-                                className="text-xs px-1.5 py-0.5 border text-white/40 hover:text-white/65 border-white/25 hover:border-white/45 transition-colors cursor-pointer font-sans"
+                                className="text-xs px-1.5 py-0.5 border text-white/40 hover:text-white/65 border-white/25 hover:border-white/45 transition-colors cursor-pointer"
                                 title="Fetch remote images through the server; the sender learns the message was opened"
                             >Load images ({blockedImages})</button>
                         )}
@@ -301,7 +322,7 @@ export function EmailCard({ email, contactName, contactEmail, contacts, parentEm
                     {/* An HTML quote is rendered inside the frame with the rest of
                         the message, so only the plain-text path expands here. */}
                     {quoteExpanded && quoteContent !== null && !showHtml && (
-                        <p className="text-sm text-white/45 whitespace-pre-wrap leading-relaxed font-sans mt-2 border-l-2 border-white/20 pl-3">{quoteContent}</p>
+                        <p className="text-sm text-white/45 whitespace-pre-wrap leading-relaxed mt-2 border-l-2 border-white/20 pl-3">{quoteContent}</p>
                     )}
                 </div>
             )}

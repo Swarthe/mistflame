@@ -88,13 +88,13 @@ export function RecipientField({ label, fixedAddress, value, onChange, contacts,
         const cls = !removable
             ? 'border-white/10 bg-white/[0.04] text-white/45'
             : contact
-                ? 'border-[#ffd54f]/40 bg-[#ffd54f]/10 text-[#ffd54f]/90'
+                ? 'border-gold/40 bg-gold/10 text-gold/90'
                 : 'border-white/20 bg-white/[0.06] text-white/80';
         return (
-            <span key={addr} title={contact ? `${contact.name} <${addr}>` : addr} className={`flex items-center gap-1 border px-1.5 py-0.5 text-xs font-sans ${cls}`}>
-                {contact ? contact.name : addr}
+            <span key={addr} title={contact ? `${contact.name} <${addr}>` : addr} className={`max-w-full min-w-0 flex items-center gap-1 border px-1.5 py-0.5 text-xs ${cls}`}>
+                <span className="truncate">{contact ? contact.name : addr}</span>
                 {removable && (
-                    <button onClick={() => remove(addr)} className="opacity-50 hover:opacity-100 transition-opacity cursor-pointer leading-none">✕</button>
+                    <button onClick={() => remove(addr)} className="shrink-0 opacity-50 hover:opacity-100 transition-opacity cursor-pointer leading-none p-1 -m-1">✕</button>
                 )}
             </span>
         );
@@ -103,15 +103,15 @@ export function RecipientField({ label, fixedAddress, value, onChange, contacts,
     return (
         <div className="relative flex-1 min-w-0">
             <div
-                className={`flex flex-wrap items-center gap-1.5 border bg-white/[0.07] px-3 py-2 cursor-text ${invalid ? 'border-red-400/60' : 'border-white/15 focus-within:border-white/40'}`}
+                className={`flex flex-wrap items-center gap-1.5 border bg-white/[0.07] px-3 py-2.5 cursor-text ${invalid ? 'border-red-400/60' : 'border-white/15 focus-within:border-white/40'}`}
                 onClick={() => inputRef.current?.focus()}
             >
-                <span className="text-xs text-white/35 font-sans select-none w-7 shrink-0">{label}</span>
+                <span className="text-xs text-white/35 select-none w-7 shrink-0">{label}</span>
                 {fixedAddress && chip(fixedAddress, false)}
                 {addrs.map(a => chip(a, true))}
                 <input
                     ref={inputRef}
-                    className="flex-1 min-w-[80px] bg-transparent text-sm text-white placeholder:text-white/25 focus:outline-none font-sans"
+                    className="flex-1 min-w-[80px] bg-transparent text-sm text-white placeholder:text-white/40 focus:outline-none"
                     value={input}
                     placeholder={addrs.length > 0 || fixedAddress ? '' : placeholder}
                     onChange={e => { setInput(e.target.value); setInvalid(false); setHighlightIdx(-1); }}
@@ -119,7 +119,7 @@ export function RecipientField({ label, fixedAddress, value, onChange, contacts,
                     onBlur={commitInput}
                 />
             </div>
-            {invalid && <p className="text-xs text-red-400 font-sans mt-1">Invalid address: {q}</p>}
+            {invalid && <p className="text-xs text-red-400 mt-1 break-all">Invalid address: {q}</p>}
             {(suggestions.length > 0 || offerRaw) && (
                 <div className="absolute left-0 right-0 top-full z-20 mt-1 bg-[#111] border border-white/15 max-h-56 overflow-y-auto">
                     {suggestions.map((c, i) => (
@@ -130,7 +130,7 @@ export function RecipientField({ label, fixedAddress, value, onChange, contacts,
                             key={c.id}
                             onMouseDown={e => { e.preventDefault(); commit(c.email); }}
                             onMouseEnter={() => setHighlightIdx(i)}
-                            className={`w-full text-left px-3 py-1.5 cursor-pointer font-sans ${i === highlightIdx ? 'bg-white/[0.08]' : ''}`}
+                            className={`w-full text-left px-3 py-1.5 cursor-pointer truncate ${i === highlightIdx ? 'bg-white/[0.08]' : ''}`}
                         >
                             <span className="text-sm text-white">{c.name}</span>
                             <span className="text-xs text-white/40 ml-2">{c.email}</span>
@@ -139,7 +139,7 @@ export function RecipientField({ label, fixedAddress, value, onChange, contacts,
                     {offerRaw && (
                         <button
                             onMouseDown={e => { e.preventDefault(); commit(q); }}
-                            className="w-full text-left px-3 py-1.5 cursor-pointer font-sans"
+                            className="w-full text-left px-3 py-1.5 cursor-pointer truncate"
                         >
                             <span className="text-sm text-white/60">Add</span>
                             <span className="text-sm text-white ml-2">{q}</span>

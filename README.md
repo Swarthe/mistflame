@@ -1,68 +1,58 @@
 # Mistflame
 
-Mistflame is a lightweight email manager for small-scale outreach/CRM and
-personal email domains. It gives you a single organised view of your contacts
-and the complete email history with each one. You can compose outbound drafts in
-the UI, and inbound replies arrive automatically via Cloudflare Email Routing.
+Mistflame is a lightweight email manager for small-scale outreach and personal
+email domains: a single organised view of your contacts and the complete email
+history with each one, for solo operators and small teams who want to track
+conversations without the overhead of a full CRM. Drafts are composed in the
+UI; inbound replies arrive automatically via Cloudflare Email Routing.
 
 ![Mistflame screenshot](screenshot.png)
 
-This software is intended for solo operators or small teams who need to
-comprehensively manage emails and track conversations without the overhead of a
-full CRM platform.
-
 Deployed entirely on Cloudflare's infrastructure with Next.js 16: Workers
 (compute), D1 (SQLite database), KV (session storage), R2 (attachments), and
-Email Workers (send and receive).
+Email Workers (send and receive). Outbound sending requires the Workers Paid
+plan; everything else works on the free tier.
 
 ## Features
 
-**Contacts**
-- Add, edit and delete contacts, with freeform colour-coded tags
-- Fuzzy search and an awaiting-reply filter in the sidebar
-
-**Search**
-- One box searches contacts and message text at once: contacts by fuzzy match,
-  subjects, tags and bodies by full text
-- Results show a highlighted extract; clicking one jumps to that message in its
-  thread
-
-**Email history**
-- Complete history per contact, grouped into threads
-- HTML messages are rendered; quoted history collapses behind a toggle
-- Attachments and inline images stored in R2 and shown in the UI
+**Contacts and history**
+- Add, edit and delete contacts, with freeform colour-coded tags and an
+  awaiting-reply filter
+- Complete email history per contact, grouped into threads; HTML messages are
+  rendered, quoted history collapses behind a toggle, and attachments and
+  inline images are stored in R2 and shown in the UI
+- One search box covers everything: contacts and tags by fuzzy match, subjects
+  and bodies by full text, with highlighted extracts that jump to the message
+  in its thread
 
 **Sending**
-- Compose drafts in markdown, editable until sent; send one at a time or all
-  at once. The editor has a formatting toolbar and a preview; the message goes
-  out as rich text with the readable source as the plain-text part
-- Pick the sender address per email; additional To recipients, CC, BCC and
-  attachments supported (each recipient gets their own copy; BCC never appears
-  in a header). Recipient fields autocomplete from your contacts, with known
-  addresses highlighted
-- Replies are threaded and quote the message they answer, preserving its HTML,
-  and are delivered to the sender's `Reply-To` address when one is set; Reply
-  All pre-fills the other recipients of the message being answered
+- Compose drafts in markdown, with a formatting toolbar, preview and
+  attachments, editable until sent; send one at a time or all at once. The
+  message goes out as rich text with the readable source as the plain-text
+  part
+- Pick the sender address per email, with extra To recipients, CC and BCC.
+  Recipient fields autocomplete from your contacts, with known addresses
+  highlighted
+- Replies are threaded, quote the message they answer (HTML preserved) and go
+  to its `Reply-To` address when one is set; Reply All pre-fills the other
+  recipients
 - Forward any received or sent email to another contact, attachments included;
   a typed address becomes a new contact on the spot
-- Requires the Cloudflare Workers Paid plan; receiving and reading work on the
-  free tier
 
 **Receiving**
-- Inbound mail matched to contacts by sender address, with unknown senders added
-  automatically
-- Threading via `In-Reply-To` and `References`, with a subject-line fallback
-- Delivery failures (bounces) are threaded onto the message that failed rather
-  than filed under a mailer-daemon contact
+- Inbound mail matched to contacts by sender address; unknown senders become
+  contacts automatically
+- Threading via `In-Reply-To` and `References`, with a subject-line fallback;
+  bounces are threaded onto the message that failed rather than filed under a
+  mailer-daemon contact
 - Remote images blocked until you ask for them, so tracking pixels do not fire
-- Optional notification email on arrival (`NOTIFY_ADDRS`), routable per
-  receiving address (`NOTIFY_MAP`), and a configurable inbound rate limit
+- Optional notification emails (`NOTIFY_ADDRS`), routable per receiving
+  address (`NOTIFY_MAP`), and a configurable inbound rate limit
   (`RATE_LIMIT_MAX`)
 
 **Access**
-- Password-protected, any number of simultaneous sessions, with an optional
-  "Remember me"; the header shows a notice while another session is active at
-  the same time
+- Password-protected, with optional "Remember me" and any number of
+  simultaneous sessions; the header notes when another session is active
 
 See [Security](#security) for how HTML email, remote images and authentication
 are handled.
@@ -109,9 +99,9 @@ npx wrangler d1 execute mistflame-db --remote --file db/schema.sql
 npx wrangler r2 bucket create mistflame-attachments
 ```
 
-No ID needed, R2 bindings reference the bucket by name. The bucket holds
-attachments and the inline images embedded in HTML message bodies; both are
-deleted along with the email or contact they belong to.
+No ID needed; R2 bindings reference the bucket by name. The bucket holds
+attachments and inline images, deleted along with the email or contact they
+belong to.
 
 ### 5. Email routing
 
@@ -137,15 +127,14 @@ same per-address or catch-all route pointing to the same worker.
 has Email Routing active, no per-address verification needed. Add multiple
 addresses to `SEND_ADDRS` (comma-separated) to send from different domains.
 
-> **Note:** outbound email sending via `EMAIL_SENDER` requires the **Cloudflare
-> Workers Paid plan**; it is a beta feature not available on the free tier.
-> Receiving inbound emails, storing them, and viewing the full UI all work
-> without it; only the send action will fail if the binding is unavailable.
+> **Note:** outbound sending via `EMAIL_SENDER` requires the **Cloudflare
+> Workers Paid plan** (it is a beta feature). Receiving, storage and the full
+> UI work without it; only the send action fails.
 
 ## Configuration
 
-All branding and addresses are set as `[vars]` in `wrangler.toml`, no code
-changes needed to customise the app for a new deployment.
+All branding and addresses are set as `[vars]` in `wrangler.toml`; no code
+changes are needed to customise a deployment.
 
 ### Main worker (`wrangler.toml`)
 
@@ -239,13 +228,9 @@ has no `ADD COLUMN IF NOT EXISTS`, so they error rather than doing nothing.
 Check whether they are needed with
 `npx wrangler d1 execute mistflame-db --remote --command "PRAGMA table_info(email)"`.
 
-Swap `--remote` for `--local` and the database name for the binding name `DB` to
-apply the same files to a development database. A one-off change can go through
-`--command` rather than a file:
-
-```bash
-npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD COLUMN notes TEXT"
-```
+Swap `--remote` for `--local` and the database name for the binding name `DB`
+to apply the same files to a development database; a one-off statement can go
+through `--command` rather than a file.
 
 ## Security
 
@@ -261,13 +246,11 @@ npx wrangler d1 execute mistflame-db --remote --command "ALTER TABLE email ADD C
 - **Remote images**: blocked by default and replaced with a placeholder, so
   tracking pixels do not fire when a message is opened. "Load images" fetches
   them through the worker, so the sender sees a Cloudflare address rather than
-  your IP address; images declaring dimensions of 1x1 are discarded and never
-  load at all. CSS `url(...)` backgrounds follow the same rule: blocked and
-  counted by default, proxied on "Load images". A CSS background has no
-  declared dimensions, so a background-based tracker cannot be discarded the
-  way a 1x1 pixel is; it fires only after the explicit opt-in, through the
-  proxy. Nothing proxied is stored, so deleting an email leaves no trace of
-  its images.
+  your IP address; images declaring 1x1 dimensions are discarded and never
+  load at all. CSS `url(...)` backgrounds follow the same rule, though with no
+  declared dimensions a background-based tracker cannot be discarded like a
+  pixel; it fires only after the explicit opt-in, through the proxy. Nothing
+  proxied is stored, so deleting an email leaves no trace of its images.
 - **Indexing**: `robots.txt` serves `Disallow: /` for all user agents, and
   `middleware.ts` sets `X-Robots-Tag: noindex, nofollow` and a restrictive
   Content-Security-Policy on every HTML response. That policy is what keeps
@@ -290,7 +273,7 @@ plain `/api/*` rule also rate-limits API routes on those workers.
 ## Development
 
 For local development, copy `.dev.vars.example` to `.dev.vars` and fill in
-values. Secrets are never stored in config files.
+values; secrets are never stored in config files.
 
 ```bash
 cp .dev.vars.example .dev.vars      # fill in values
@@ -314,19 +297,17 @@ npx wrangler d1 execute DB --local --file db/seed-local.sql
 npx wrangler d1 execute DB --local --command "DELETE FROM attachment; DELETE FROM email; DELETE FROM contact; DELETE FROM tag; DELETE FROM contact_tag; DELETE FROM sqlite_sequence WHERE name IN ('email','contact','tag','attachment');"
 ```
 
-The seeded HTML email references an inline image, whose bytes have to be put
-into local R2 separately or it renders as a missing image; the comment above
+The seeded HTML email references an inline image whose bytes have to be put
+into local R2 separately, or it renders as a missing image; the comment above
 thread 4 in `db/seed-local.sql` has the one-off command.
 
-All `wrangler d1` commands use the binding name `DB` (not the database name) and
-must be run from the project root. Local state is stored in
-`.wrangler/state/v3/d1/` (gitignored); delete that directory to fully reset the
-database.
+Local `wrangler d1` commands use the binding name `DB` (not the database name)
+and run from the project root. Local state lives in `.wrangler/state/v3/d1/`
+(gitignored); delete that directory to fully reset the database.
 
 ## Limitations and missing features
 
-Contributions and feature requests are welcome. The following features are not
-currently implemented.
+Contributions and feature requests are welcome. Not currently implemented:
 
 - **WYSIWYG composing**: formatting is written as markdown in a plain
   textarea (with a toolbar and preview) rather than edited in place, and
@@ -334,11 +315,11 @@ currently implemented.
 - **Inline images in quoted history**: `cid:` images are dropped from the quote
   of an outgoing reply, since their Content-ID belongs to the received message.
   A full mail client re-attaches those parts; this one does not
-- **Search scope**: full-text search covers subjects and message text, but not
+- **Search scope**: full-text search covers subjects and bodies, but not
   attachment contents or contact descriptions, and there are no field filters
   such as `from:` or date ranges
 - **Contact import/export**: no CSV or vCard import/export
-- **Pagination**: long contact lists and email histories are loaded in full
+- **Pagination**: long contact lists and email histories load in full
 - **Email templates / LLM integration**: no reusable draft templates or LLM
   support for reply generation
 - **Scheduled sending**: no support for sending emails at a scheduled time
@@ -347,7 +328,6 @@ currently implemented.
 - **Push updates**: new mail appears through polling rather than a push, so it
   can take up to five seconds to show. The poll itself is cheap (see Notes), but
   there is no WebSocket or SSE channel
-- Mobile/small window friendly UI
 
 ## Notes
 
@@ -355,26 +335,22 @@ currently implemented.
   harmless, `@opennextjs/cloudflare` 1.x requires this convention
 - D1 FK constraints are declared in the schema but not enforced at runtime;
   cascading deletes are handled manually in route handlers
-- The client checks for new mail every five seconds, but rather than refetching
-  the contact list, the open thread and the pending-send count each time, it
-  reads a single counter from `GET /api/revision` and only refetches when that
-  number has moved. The counter lives in the `meta` table, maintained by SQLite
-  triggers on every user-visible table; triggers rather than bumps in the route
-  handlers, because the email receiver is a separate worker that writes to D1
-  directly and never goes through the API. An idle tab therefore costs one
-  indexed row read per poll, and polling pauses while the tab is hidden. A full
-  refetch happens once a minute regardless, so a write path that ever lands
-  without a trigger behind it degrades to a slow refresh rather than a stuck
-  view
+- The client checks for new mail every five seconds, but reads a single
+  revision counter (`GET /api/revision`) and refetches the lists only when it
+  has moved. The counter is maintained by SQLite triggers on every
+  user-visible table, so the email receiver's direct D1 writes are covered
+  too. An idle tab costs one indexed row read per poll, polling pauses while
+  the tab is hidden, and an unconditional refetch once a minute means a write
+  path without a trigger degrades to a slow refresh rather than a stuck view
 - The same poll doubles as a presence heartbeat: the `presence` table stores a
-  hash of each session token with a last-seen time, and the header shows
-  "n other sessions active" while any besides your own were seen in the last
-  30 seconds. Sessions are anonymous, so the notice counts rather than names
-- Emails received before HTML rendering existed have raw markup stored in their
-  body column. `scripts/backfill-html-bodies.mjs` converts those rows into a
-  readable text body plus the HTML fragment; it reads a D1 dump and writes SQL
-  for review rather than touching the database itself. Its inputs and output
-  contain real correspondence and are gitignored
+  hash of each session token with a last-seen time, and the header counts the
+  other sessions seen in the last 30 seconds. Sessions are anonymous, so the
+  notice counts rather than names
+- Emails received before HTML rendering existed have raw markup in their body
+  column. `scripts/backfill-html-bodies.mjs` converts those rows to a readable
+  text body plus the HTML fragment; it reads a D1 dump and writes SQL for
+  review rather than touching the database. Its inputs and output contain real
+  correspondence and are gitignored
 
 ## License
 

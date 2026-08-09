@@ -6,6 +6,11 @@ INSERT INTO contact (id, name, email) VALUES
     (1, 'Alice Nguyen',  'alice@example.com'),
     (2, 'Bob Tremblay',  'bob@example.com');
 
+-- A colour-coded tag on Alice, so the sidebar chip and the contact header
+-- have something to show.
+INSERT INTO tag (id, name, color) VALUES (1, 'prospect', '#4fc3f7');
+INSERT INTO contact_tag (contact_id, tag_id) VALUES (1, 1);
+
 -- ── Thread 1 (Alice): contact form → outbound reply with quote → contact replies with quote ──
 
 -- Email 1: inbound contact form submission (no quote; button should NOT show)

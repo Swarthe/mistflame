@@ -20,7 +20,7 @@ export function SnippetText({ snippet }: { snippet: string }) {
     return (
         <>
             {pieces.map((piece, i) => piece.hit
-                ? <mark key={i} className="bg-[#ffd54f]/25 text-[#ffd54f] rounded-[1px]">{piece.text}</mark>
+                ? <mark key={i} className="bg-gold/25 text-gold rounded-[1px]">{piece.text}</mark>
                 : <span key={i}>{piece.text}</span>)}
         </>
     );

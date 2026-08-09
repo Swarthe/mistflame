@@ -54,7 +54,7 @@ export function useSanitisedHtml(email: EmailRecord, loadImages: boolean): Sanit
     // exists to carry the quote chain to the recipient, not to be read back here.
     // It stays in body_html regardless, because the next reply quotes it.
     const html = email.sender === null ? email.body_html : null;
-    // Polling replaces the attachment array every 10 seconds; depend on the cid
+    // A poll that refetches replaces the attachment array; depend on the cid
     // mapping itself so a poll does not re-sanitise and rebuild the DOM.
     const cidKey = email.attachments
         .map(a => `${a.id}:${a.content_id ?? ''}`)

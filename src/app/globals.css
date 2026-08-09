@@ -1,73 +1,24 @@
 @import "tailwindcss";
-@import "tw-animate-css";
-@import "shadcn/tailwind.css";
 
-@custom-variant dark (&:is(.dark *));
+/*
+ * The app is dark-only, so the palette is a handful of literal dark values;
+ * there is no light theme and no theme switching. Gold is the accent colour
+ * throughout the UI and must always be used via the `gold` token classes
+ * (text-gold/60, border-gold/25, ...), never as a hex literal.
+ */
+@theme {
+  --color-background: oklch(0 0 0);
+  --color-foreground: oklch(0.985 0 0);
+  --color-border: oklch(1 0 0 / 10%);
+  --color-ring: oklch(0.556 0 0);
+  --color-gold: #ffd54f;
+  /* Lighter hover shade; markdown links only. */
+  --color-gold-bright: #ffe082;
+}
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
   --font-sans: var(--font-dm-sans);
-  --font-heading-bold: var(--font-playfair);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-}
-
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --radius: 0.625rem;
-}
-
-.dark {
-  --background: oklch(0 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --font-heading-bold: var(--font-libre-baskerville);
 }
 
 @layer base {
@@ -144,11 +95,11 @@
 }
 .mf-markdown pre code { background: none; padding: 0; }
 .mf-markdown a {
-  color: #ffd54f;
+  color: var(--color-gold);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.mf-markdown a:hover { color: #ffe082; }
+.mf-markdown a:hover { color: var(--color-gold-bright); }
 .mf-markdown hr {
   border: 0;
   border-top: 1px solid rgba(255, 255, 255, 0.15);
@@ -161,3 +112,15 @@
   padding: 0.25em 0.6em;
 }
 .mf-markdown th { font-weight: 600; }
+/*
+ * Overflow defences mirroring FRAME_STYLES in src/lib/email-html.ts, so our
+ * own composed mail is as overflow-safe as received mail. Tables get
+ * display: block because max-width alone cannot shrink one below its content
+ * width; a wide table scrolls inside the card instead of widening the page.
+ */
+.mf-markdown { overflow-wrap: break-word; }
+.mf-markdown table {
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}

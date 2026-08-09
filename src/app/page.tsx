@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { Menu } from 'lucide-react';
 import type { AppConfig, Attachment, Contact, EmailRecord, SearchResult } from '@/lib/types';
 import { fuzzyMatch } from '@/lib/format';
 import { useEmailSearch } from '@/hooks/useEmailSearch';
@@ -12,7 +13,8 @@ import { NewEmailCard } from '@/components/NewEmailCard';
 import { ForwardModal } from '@/components/ForwardModal';
 import { SendModal, type SendResult } from '@/components/SendModal';
 import { TagChip } from '@/components/TagChip';
-import { btnGhost } from '@/components/styles';
+import { Wordmark } from '@/components/Wordmark';
+import { btnGhost, btnDanger, btnDangerOutline, btnGold } from '@/components/styles';
 
 const POLL_INTERVAL_MS = 5_000;
 const HIGHLIGHT_MS = 2_500;
@@ -41,6 +43,9 @@ export default function OutreachPage() {
     const [loadingContacts, setLoadingContacts] = useState(true);
     const [contactsError, setContactsError] = useState(false);
     const [loadingEmails, setLoadingEmails] = useState(false);
+    const [emailsError, setEmailsError] = useState(false);
+    // Below md the sidebar is an overlay drawer; this opens it.
+    const [sidebarOpen, setSidebarOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [apiError, setApiError] = useState<string | null>(null);
 
@@ -108,12 +113,21 @@ export default function OutreachPage() {
             .then(r => json<{ emails?: EmailRecord[] }>(r))
             .then(data => {
                 if (selectedIdRef.current !== id) return;
+                setEmailsError(false);
                 setEmails(prev => {
                     const next = data.emails ?? [];
                     return JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
                 });
             })
-            .catch(() => {});
+            .catch(() => {
+                if (selectedIdRef.current === id) setEmailsError(true);
+            });
+
+    const retryEmails = () => {
+        if (selectedId === null) return;
+        setLoadingEmails(true);
+        fetchEmails(selectedId).finally(() => setLoadingEmails(false));
+    };
 
     const fetchPendingCount = () => {
         apiFetch('/api/send-emails')
@@ -259,6 +273,12 @@ export default function OutreachPage() {
 
     /** Returns false when a discard prompt was declined and nothing changed. */
     const selectContact = (id: number): boolean => {
+        // Re-selecting the current contact changes nothing; without this it
+        // would prompt to discard an open composer and then wipe it.
+        if (id === selectedId) {
+            setSidebarOpen(false);
+            return true;
+        }
         if (addingContact && (addContactForm.name || addContactForm.email || addContactForm.description)) {
             if (!confirm('Discard new contact?')) return false;
         } else if (editContact) {
@@ -268,6 +288,7 @@ export default function OutreachPage() {
         } else if (editingEmailId !== null) {
             if (!confirm('Discard unsaved email edits?')) return false;
         }
+        setSidebarOpen(false);
         setSelectedId(id);
         setAddingContact(false);
         setAddContactForm({});
@@ -285,6 +306,7 @@ export default function OutreachPage() {
         if (editContact && !confirm('Discard unsaved changes?')) return;
         if ((addingEmail || replyToEmail) && !confirm('Discard unsaved email?')) return;
         if (editingEmailId !== null && !confirm('Discard unsaved email edits?')) return;
+        setSidebarOpen(false);
         setAddingContact(true);
         setSelectedId(null);
         setEditContact(null);
@@ -298,6 +320,7 @@ export default function OutreachPage() {
 
     const openSearchResult = (result: SearchResult) => {
         if (result.contact_id === selectedId) {
+            setSidebarOpen(false);
             scrollToEmail(result.id);
             return;
         }
@@ -307,7 +330,22 @@ export default function OutreachPage() {
         setPendingScrollId(result.id);
     };
 
+    // Coarse dirty flag: an open composer, edit or filled contact form. The
+    // body text lives in the child components, so "open" stands in for
+    // "dirty", matching the in-app discard prompts.
+    const hasUnsavedWork = addingEmail || replyToEmail !== null
+        || editingEmailId !== null || editContact !== null
+        || (addingContact && !!(addContactForm.name || addContactForm.email || addContactForm.description));
+
+    useEffect(() => {
+        if (!hasUnsavedWork) return;
+        const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+        window.addEventListener('beforeunload', handler);
+        return () => window.removeEventListener('beforeunload', handler);
+    }, [hasUnsavedWork]);
+
     const logout = async () => {
+        if (hasUnsavedWork && !confirm('Discard unsaved changes and log out?')) return;
         await fetch('/api/auth', { method: 'DELETE' });
         router.push('/login');
     };
@@ -355,6 +393,8 @@ export default function OutreachPage() {
             } else {
                 setContactSaveError(data.error ?? 'Failed to save contact.');
             }
+        } catch {
+            setContactSaveError('Network error — could not reach the server.');
         } finally { setSaving(false); }
     };
 
@@ -376,18 +416,29 @@ export default function OutreachPage() {
             } else {
                 setContactSaveError(data.error ?? 'Failed to save contact.');
             }
+        } catch {
+            setContactSaveError('Network error — could not reach the server.');
         } finally { setSaving(false); }
     };
 
     const deleteContact = async (id: number) => {
         if (!confirm('Delete this contact and all their emails?')) return;
-        const res = await apiFetch(`/api/contacts/${id}`, { method: 'DELETE' });
-        if (res.ok) {
-            setContacts(prev => prev.filter(c => c.id !== id));
-            if (selectedId === id) setSelectedId(null);
+        setApiError(null);
+        try {
+            const res = await apiFetch(`/api/contacts/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                setContacts(prev => prev.filter(c => c.id !== id));
+                if (selectedId === id) setSelectedId(null);
+            } else {
+                setApiError('The contact could not be deleted.');
+            }
+        } catch {
+            setApiError('Network error — could not reach the server.');
         }
     };
 
+    // No editingEmailId guard here or in startReply: an in-place edit lives in
+    // its EmailCard's local state and survives a composer opening unharmed.
     const startAddEmail = () => {
         if (addingEmail && !confirm('Discard unsaved email?')) return;
         setReplyToEmail(null);
@@ -494,11 +545,19 @@ export default function OutreachPage() {
     };
 
     const deleteAttachment = async (emailId: number, attachmentId: number) => {
-        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments/${attachmentId}`, {
-            method: 'DELETE',
-        });
-        if (res.ok) {
-            setEmails(prev => prev.map(e => e.id === emailId ? { ...e, attachments: e.attachments.filter(a => a.id !== attachmentId) } : e));
+        if (!confirm('Delete this attachment?')) return;
+        setApiError(null);
+        try {
+            const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}/attachments/${attachmentId}`, {
+                method: 'DELETE',
+            });
+            if (res.ok) {
+                setEmails(prev => prev.map(e => e.id === emailId ? { ...e, attachments: e.attachments.filter(a => a.id !== attachmentId) } : e));
+            } else {
+                setApiError('The attachment could not be deleted.');
+            }
+        } catch {
+            setApiError('Network error — could not reach the server.');
         }
     };
 
@@ -527,33 +586,47 @@ export default function OutreachPage() {
     const editEmail = async (emailId: number, sender: string | null, subject: string, body: string, cc: string, toAddrs: string, bcc: string) => {
         // Saving through the markdown editor makes the draft markdown, even
         // one created as 'text' before the editor became markdown-only.
-        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sender, subject: subject.trim() || null, body, body_format: 'markdown', cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null }),
-        });
+        // Failures are rethrown with a readable message; EmailCard shows them
+        // next to its Save button.
+        let res: Response;
+        try {
+            res = await apiFetch(`/api/contacts/${selectedId}/emails/${emailId}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sender, subject: subject.trim() || null, body, body_format: 'markdown', cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null }),
+            });
+        } catch {
+            throw new Error('Network error — could not reach the server.');
+        }
         if (res.ok) {
             // Only the row itself changes: an edit cannot alter parent_id or
             // null the sender, so the contact's awaiting_reply is unaffected.
             setEmails(prev => prev.map(e => e.id === emailId ? { ...e, sender, subject: subject.trim() || null, body, body_format: 'markdown' as const, cc: cc.trim() || null, to_addrs: toAddrs.trim() || null, bcc: bcc.trim() || null } : e));
         } else {
-            const data = (await res.json()) as { error?: string };
+            const data = (await res.json().catch(() => ({}))) as { error?: string };
             throw new Error(data.error ?? 'Failed to save');
         }
     };
 
     const deleteEmail = async (id: number) => {
         if (!confirm('Delete this email and all its replies?')) return;
-        const res = await apiFetch(`/api/contacts/${selectedId}/emails/${id}`, { method: 'DELETE' });
-        if (res.ok) {
-            const data = (await res.json()) as { deleted?: number };
-            if ((data.deleted ?? 1) > 1) {
-                if (selectedId !== null) fetchEmails(selectedId);
+        setApiError(null);
+        try {
+            const res = await apiFetch(`/api/contacts/${selectedId}/emails/${id}`, { method: 'DELETE' });
+            if (res.ok) {
+                const data = (await res.json()) as { deleted?: number };
+                if ((data.deleted ?? 1) > 1) {
+                    if (selectedId !== null) fetchEmails(selectedId);
+                } else {
+                    setEmails(prev => prev.filter(e => e.id !== id));
+                }
+                refreshPendingCount();
+                refreshContacts();
             } else {
-                setEmails(prev => prev.filter(e => e.id !== id));
+                setApiError('The email could not be deleted.');
             }
-            refreshPendingCount();
-            refreshContacts();
+        } catch {
+            setApiError('Network error — could not reach the server.');
         }
     };
 
@@ -650,23 +723,27 @@ export default function OutreachPage() {
     }, [addingEmail, replyToEmail]);
 
     return (
-        <div className="h-screen bg-black text-white font-sans flex flex-col overflow-hidden">
+        <div className="h-dvh bg-black text-white flex flex-col overflow-hidden">
             {/* Header */}
-            <header className="flex-shrink-0 border-b border-white/25 px-6 py-4 flex items-center justify-between">
-                <h1 className="font-heading-bold text-xl tracking-wide">
-                    <span className="text-[#ffd54f]">Mistflame</span>
-                    {config?.orgName && <><span className="text-white/30 mx-1.5">—</span><span className="text-white">{config.orgName}</span></>}
-                </h1>
-                <div className="flex items-center gap-3">
+            <header className="flex-shrink-0 border-b border-white/25 px-4 sm:px-6 py-3 sm:py-4 flex flex-wrap items-center gap-x-3 gap-y-2">
+                <button
+                    onClick={() => setSidebarOpen(v => !v)}
+                    className="md:hidden shrink-0 p-1.5 border border-white/20 text-white/65 hover:text-white hover:border-white/40 transition-colors cursor-pointer"
+                    title="Contacts"
+                >
+                    <Menu className="w-4 h-4" />
+                </button>
+                <Wordmark orgName={config?.orgName ?? ''} className="text-xl min-w-0 truncate" />
+                <div className="flex items-center gap-3 ml-auto">
                     {activeOthers > 0 && (
-                        <span className="text-sm text-[#ffd54f]/65 font-sans" title="Someone else is logged in and using the app right now">
+                        <span className="hidden lg:inline text-sm text-gold/65" title="Someone else is logged in and using the app right now">
                             {activeOthers} other session{activeOthers === 1 ? '' : 's'} active
                         </span>
                     )}
-                    <button onClick={openSendModal} disabled={pendingCount === 0} className={`text-sm border px-4 py-1.5 transition-colors font-sans ${pendingCount === 0 ? 'text-[#ffd54f]/30 border-[#ffd54f]/10 cursor-not-allowed' : 'text-[#ffd54f]/70 hover:text-[#ffd54f] border-[#ffd54f]/25 hover:border-[#ffd54f]/55 cursor-pointer'}`}>
+                    <button onClick={openSendModal} disabled={pendingCount === 0} className={`whitespace-nowrap shrink-0 text-sm border px-4 py-2 transition-colors ${pendingCount === 0 ? 'text-gold/30 border-gold/10 cursor-not-allowed' : 'text-gold/70 hover:text-gold border-gold/25 hover:border-gold/55 cursor-pointer'}`}>
                         Send emails{pendingCount ? ` (${pendingCount})` : ''}
                     </button>
-                    <button onClick={logout} className="text-sm text-white/55 hover:text-white/85 border border-white/20 hover:border-white/40 px-4 py-1.5 transition-colors cursor-pointer font-sans">
+                    <button onClick={logout} className={`${btnGhost} whitespace-nowrap shrink-0`}>
                         Log out
                     </button>
                 </div>
@@ -692,10 +769,12 @@ export default function OutreachPage() {
                     onOpenResult={openSearchResult}
                     onNewContact={startAddContact}
                     onRetry={fetchContacts}
+                    mobileOpen={sidebarOpen}
+                    onCloseMobile={() => setSidebarOpen(false)}
                 />
 
                 {/* Main area */}
-                <main className="flex-1 overflow-y-auto p-6 min-w-0">
+                <main className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 min-w-0">
                     {addingContact && (
                         <section className="mb-8">
                             <h2 className="font-heading-bold text-lg tracking-wide text-white mb-4">New Contact</h2>
@@ -729,11 +808,11 @@ export default function OutreachPage() {
                                     <div className="flex flex-col gap-3">
                                         <div className="flex items-start justify-between gap-4">
                                             <div className="min-w-0">
-                                                <h2 className="font-heading-bold text-xl tracking-wide text-white">{selectedContact.name}</h2>
+                                                <h2 className="font-heading-bold text-xl tracking-wide text-white break-words">{selectedContact.name}</h2>
                                                 <div className="flex flex-wrap items-center gap-3 mt-1">
                                                     <a
                                                         href={`mailto:${selectedContact.email}`}
-                                                        className="text-sm text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors font-sans"
+                                                        className="text-sm text-gold/70 hover:text-gold transition-colors min-w-0 break-all"
                                                     >
                                                         {selectedContact.email}
                                                     </a>
@@ -750,14 +829,14 @@ export default function OutreachPage() {
                                                 </button>
                                                 <button
                                                     onClick={() => deleteContact(selectedContact.id)}
-                                                    className="text-xs text-red-400/80 hover:text-red-400 border border-red-400/30 hover:border-red-400/55 px-3 py-2 transition-colors cursor-pointer font-sans"
+                                                    className={btnDangerOutline}
                                                 >
                                                     Delete
                                                 </button>
                                             </div>
                                         </div>
                                         {selectedContact.description && (
-                                            <p className="text-sm text-white/75 leading-relaxed font-sans">{selectedContact.description}</p>
+                                            <p className="text-sm text-white/75 leading-relaxed break-words">{selectedContact.description}</p>
                                         )}
                                     </div>
                                 )}
@@ -765,23 +844,31 @@ export default function OutreachPage() {
 
                             <section>
                                 <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-xs text-white/65 uppercase tracking-wider font-sans">
+                                    <h3 className="text-xs text-white/65 uppercase tracking-wider">
                                         Email History {emails.length > 0 && <span className="text-white/45 normal-case tracking-normal">({emails.length})</span>}
                                     </h3>
                                     {!addingEmail && !editContact && (
-                                        <button onClick={startAddEmail} className="text-xs text-[#ffd54f]/70 hover:text-[#ffd54f] transition-colors cursor-pointer font-sans">
+                                        <button onClick={startAddEmail} className={btnGold}>
                                             + Email
                                         </button>
                                     )}
                                 </div>
 
                                 {apiError && (
-                                    <p className="text-sm text-red-400 font-sans mb-4 px-1">{apiError}</p>
+                                    <div className="flex items-start justify-between gap-3 mb-4 px-1">
+                                        <p className="text-sm text-red-400 break-words">{apiError}</p>
+                                        <button onClick={() => setApiError(null)} className={`${btnDanger} p-1 -m-1 mt-1`} title="Dismiss">✕</button>
+                                    </div>
                                 )}
-                                {loadingEmails && emails.length === 0 && <p className="text-sm text-white/55 text-center py-6 font-sans">Loading…</p>}
-                                {!loadingEmails && emails.length === 0 && !addingEmail && (
-                                    <p className="text-sm text-white/55 text-center py-6 font-sans">No emails on record</p>
-                                )}
+                                {loadingEmails && emails.length === 0 && <p className="text-sm text-white/55 text-center py-6">Loading…</p>}
+                                {!loadingEmails && emails.length === 0 && !addingEmail && (emailsError ? (
+                                    <div className="py-6 flex flex-col items-center gap-3">
+                                        <p className="text-sm text-white/55">Failed to load emails</p>
+                                        <button onClick={retryEmails} className="text-xs text-white/50 hover:text-white/80 transition-colors cursor-pointer">Retry</button>
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-white/55 text-center py-6">No emails on record</p>
+                                ))}
                                 <div className="flex flex-col gap-4">
                                     {threadGroups.map(([threadId, threadEmails], groupIdx) => {
                                         const threadSender = threadEmails.find(e => e.sender !== null)?.sender ?? null;
@@ -791,8 +878,8 @@ export default function OutreachPage() {
                                             <div key={threadId} className="flex flex-col gap-2">
                                                 {groupIdx > 0 && <div className="h-px bg-white/10 my-1" />}
                                                 <div className="flex items-center gap-2 mb-1">
-                                                    <span className="text-xs text-white/50 font-sans">Thread {threadId}</span>
-                                                    <span className="text-xs text-white/35 font-sans">· {threadEmails.length} {threadEmails.length === 1 ? 'email' : 'emails'}</span>
+                                                    <span className="text-xs text-white/50">Thread {threadId}</span>
+                                                    <span className="text-xs text-white/35">· {threadEmails.length} {threadEmails.length === 1 ? 'email' : 'emails'}</span>
                                                 </div>
                                                 {threadEmails.map(email => (
                                                     <EmailCard
@@ -847,7 +934,7 @@ export default function OutreachPage() {
                                         <div ref={composeRef} className="flex flex-col gap-2">
                                             {threadGroups.length > 0 && <div className="h-px bg-white/10 my-1" />}
                                             <div className="flex items-center gap-2 mb-1">
-                                                <span className="text-xs text-white/50 font-sans">Thread {nextThreadId}</span>
+                                                <span className="text-xs text-white/50">Thread {nextThreadId}</span>
                                             </div>
                                             <NewEmailCard
                                                 replyTo={null}
@@ -871,7 +958,7 @@ export default function OutreachPage() {
 
                     {!selectedContact && !addingContact && (
                         <div className="h-full flex items-center justify-center min-h-[200px]">
-                            <p className="text-sm text-white/50 font-sans">← Select a contact or add a new one</p>
+                            <p className="text-sm text-white/50">← Select a contact or add a new one</p>
                         </div>
                     )}
                 </main>

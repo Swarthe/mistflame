@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { Wordmark } from '@/components/Wordmark';
+import { inputCls, btnPrimary } from '@/components/styles';
 
 export default function LoginPage() {
     const router = useRouter();
@@ -35,46 +37,43 @@ export default function LoginPage() {
     };
 
     return (
-        <main className="min-h-screen bg-black flex items-center justify-center px-4">
+        <main className="min-h-dvh bg-black flex items-center justify-center px-4">
             <div className="flex flex-col gap-4 w-full max-w-xs">
                 <div className="mb-2 text-center">
-                    <h1 className="font-heading-bold text-2xl tracking-wide">
-                        <span className="text-[#ffd54f]">Mistflame</span>
-                        {orgName && <><span className="text-white/30 mx-1.5">—</span><span className="text-white">{orgName}</span></>}
-                    </h1>
+                    <Wordmark orgName={orgName} className="text-2xl" />
                 </div>
 
                 <form onSubmit={e => { e.preventDefault(); submit(); }} className="flex flex-col gap-4">
+                    <input
+                        type="password"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        placeholder="Password"
+                        autoFocus
+                        disabled={loading}
+                        className={inputCls}
+                    />
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        className={btnPrimary}
+                    >
+                        {loading ? 'Checking…' : 'Enter'}
+                    </button>
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
                         <input
-                            type="password"
-                            value={password}
-                            onChange={e => setPassword(e.target.value)}
-                            placeholder="Password"
-                            autoFocus
+                            type="checkbox"
+                            checked={remember}
+                            onChange={e => setRemember(e.target.checked)}
                             disabled={loading}
-                            className="bg-white/[0.07] border border-white/15 text-white text-sm px-4 py-3 font-sans focus:outline-none focus:border-white/40 placeholder:text-white/40"
+                            className="cursor-pointer accent-gold"
                         />
-                        <button
-                            type="submit"
-                            disabled={loading}
-                            className="bg-white/80 text-black font-sans text-sm font-bold py-3 hover:bg-[#ffd54f] transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                        >
-                            {loading ? 'Checking…' : 'Enter'}
-                        </button>
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={remember}
-                                onChange={e => setRemember(e.target.checked)}
-                                disabled={loading}
-                                className="cursor-pointer accent-[#ffd54f]"
-                            />
-                            <span className="text-xs text-white/60 font-sans">Remember me</span>
-                        </label>
-                        <div className="h-4">
-                            {error && <p className="font-sans text-xs text-red-400">{error}</p>}
-                        </div>
-                    </form>
+                        <span className="text-xs text-white/60">Remember me</span>
+                    </label>
+                    <div className="min-h-4">
+                        {error && <p className="text-xs text-red-400 break-words">{error}</p>}
+                    </div>
+                </form>
                 <a
                     href="https://github.com/Swarthe/mistflame"
                     target="_blank"

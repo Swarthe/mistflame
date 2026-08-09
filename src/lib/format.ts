@@ -30,12 +30,18 @@ export function fuzzyMatch(query: string, target: string): boolean {
     return qi === q.length;
 }
 
+// An unparseable timestamp yields the raw string: new Date() does not throw
+// on garbage, it returns an Invalid Date, so a try/catch would not help.
 export function formatDate(iso: string): string {
-    try {
-        return new Date(iso).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
-    } catch {
-        return iso;
-    }
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+export function formatDateOnly(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString('en-GB', { dateStyle: 'short' });
 }
 
 export function splitQuote(body: string): { main: string; quote: string | null } {

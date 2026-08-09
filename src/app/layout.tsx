@@ -9,7 +9,7 @@ const dmSans = DM_Sans({
 });
 
 const libreBaskerville = Libre_Baskerville({
-    variable: '--font-playfair',
+    variable: '--font-libre-baskerville',
     subsets: ['latin'],
     weight: '700',
 });
@@ -24,14 +24,13 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-    // The app is dark-only, so the `dark` class is set here rather than by a
-    // theme provider. It has to be present in the server-rendered HTML: the
-    // colour variables in globals.css default to a light palette under :root, so
-    // a class applied only after hydration means the first paint is white.
+    // The app is dark-only; the palette is defined directly as dark literals
+    // in globals.css, so no theme class is needed. (next-themes once supplied
+    // a `dark` class here and was removed; see CLAUDE.md, Styling.)
     return (
         <html
             lang="en"
-            className={`dark ${dmSans.variable} ${libreBaskerville.variable} h-full antialiased`}
+            className={`${dmSans.variable} ${libreBaskerville.variable} h-full antialiased`}
         >
             <body className="min-h-full flex flex-col bg-background text-foreground">
                 {children}
