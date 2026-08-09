@@ -54,8 +54,11 @@ export function ContactSidebar({
                         <span className="text-white/30">—</span>
                         <span>{contacts.length}</span>
                         {contacts.filter(c => c.awaiting_reply).length > 0 && (
-                            <span className="flex items-center">
-                                ({' '}<span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />{' '}{contacts.filter(c => c.awaiting_reply).length}{' '})
+                            <span className="flex items-center gap-0.5">
+                                <span>(</span>
+                                <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
+                                <span className="ml-0.5">{contacts.filter(c => c.awaiting_reply).length}</span>
+                                <span>)</span>
                             </span>
                         )}
                     </div>
