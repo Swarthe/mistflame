@@ -1,5 +1,3 @@
-'use client';
-
 import { useState, useEffect, useRef } from 'react';
 import { buildEmailDocument } from '@/lib/email-html';
 import type { Contact, EmailRecord } from '@/lib/types';

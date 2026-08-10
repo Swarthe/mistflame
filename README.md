@@ -17,7 +17,9 @@ plan; everything else works on the free tier.
 
 **Contacts and history**
 - Add, edit and delete contacts, with freeform colour-coded tags and an
-  awaiting-reply filter
+  awaiting-reply filter. The list is ordered by most recent activity and
+  shows each contact's last-activity date, with a pencil marking contacts
+  that have unsent drafts
 - Complete email history per contact, grouped into threads; HTML messages are
   rendered, quoted history collapses behind a toggle, and attachments and
   inline images are stored in R2 and shown in the UI
@@ -319,6 +321,13 @@ Contributions and feature requests are welcome. Not currently implemented:
   attachment contents or contact descriptions, and there are no field filters
   such as `from:` or date ranges
 - **Contact import/export**: no CSV or vCard import/export
+- **Unified inbox**: mail is read per contact; there is no cross-contact view
+  of recent inbound messages, so triage means scanning the sidebar
+- **Follow-up reminders**: nothing resurfaces a contact whose last message is
+  an unanswered outbound one; the awaiting-reply dot only covers mail that is
+  waiting on you, not mail you are waiting on
+- **Contact archiving**: finished conversations cannot be archived or hidden,
+  only deleted along with their history
 - **Pagination**: long contact lists and email histories load in full
 - **Email templates / LLM integration**: no reusable draft templates or LLM
   support for reply generation

@@ -1,5 +1,3 @@
-'use client';
-
 import { ModalShell } from '@/components/ModalShell';
 import { btnPrimary, btnGhost } from '@/components/styles';
 

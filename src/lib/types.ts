@@ -19,6 +19,11 @@ export interface Contact {
     description: string | null;
     tags: Tag[];
     awaiting_reply: number;
+    /** MAX(sent_at) over the contact's emails; null until something has
+     *  been sent or received (drafts carry no timestamp). */
+    last_activity: string | null;
+    /** 1 = the contact has an unsent draft. */
+    has_draft: number;
 }
 
 export interface Attachment {

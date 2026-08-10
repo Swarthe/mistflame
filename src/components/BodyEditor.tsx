@@ -1,5 +1,3 @@
-'use client';
-
 import { useRef, useState } from 'react';
 import { Bold, Italic, Code, Link, List, ListOrdered, TextQuote, CircleHelp, Paperclip } from 'lucide-react';
 import { useMarkdownHtml } from '@/hooks/useMarkdownHtml';

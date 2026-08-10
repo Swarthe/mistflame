@@ -1,5 +1,3 @@
-'use client';
-
 import { useState, useRef } from 'react';
 import type { Contact, EmailRecord } from '@/lib/types';
 import { ReplyPreview } from '@/components/ReplyPreview';

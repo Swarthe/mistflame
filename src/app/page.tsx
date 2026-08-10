@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { Menu } from 'lucide-react';
 import type { AppConfig, Attachment, Contact, EmailRecord, SearchResult } from '@/lib/types';
-import { fuzzyMatch } from '@/lib/format';
+import { compareContacts, fuzzyMatch } from '@/lib/format';
 import { useEmailSearch } from '@/hooks/useEmailSearch';
 import { ContactSidebar } from '@/components/ContactSidebar';
 import { ContactForm } from '@/components/ContactForm';
@@ -139,9 +139,10 @@ export default function OutreachPage() {
             .catch(() => setPendingCount(0));
     };
 
+    // No synchronous setState in here: the mount effect calls this, and the
+    // initial loadingContacts/contactsError state already matches what a
+    // fresh fetch needs. Retry goes through retryContacts below.
     const fetchContacts = () => {
-        setLoadingContacts(true);
-        setContactsError(false);
         apiFetch('/api/contacts')
             .then(r => json<{ contacts?: Contact[] }>(r))
             .then(data => {
@@ -153,6 +154,12 @@ export default function OutreachPage() {
             })
             .catch(() => setContactsError(true))
             .finally(() => setLoadingContacts(false));
+    };
+
+    const retryContacts = () => {
+        setLoadingContacts(true);
+        setContactsError(false);
+        fetchContacts();
     };
 
     const fetchRevision = (): Promise<number | null> =>
@@ -198,10 +205,18 @@ export default function OutreachPage() {
         // store a revision newer than the data they returned.
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    useEffect(() => {
-        if (selectedId === null) { setEmails([]); return; }
+    // Selection changed: reset the thread pane during render (React's
+    // "adjusting state when a prop changes" pattern) so the effect below only
+    // starts the fetch and never calls setState synchronously.
+    const [emailsForId, setEmailsForId] = useState<number | null>(null);
+    if (emailsForId !== selectedId) {
+        setEmailsForId(selectedId);
         setEmails([]);
-        setLoadingEmails(true);
+        setLoadingEmails(selectedId !== null);
+    }
+
+    useEffect(() => {
+        if (selectedId === null) return;
         fetchEmails(selectedId).finally(() => setLoadingEmails(false));
     }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -386,7 +401,7 @@ export default function OutreachPage() {
             });
             const data = (await res.json()) as { contact?: Contact; error?: string };
             if (res.ok && data.contact) {
-                setContacts(prev => [...prev, data.contact!].sort((a, b) => a.name.localeCompare(b.name)));
+                setContacts(prev => [...prev, data.contact!].sort(compareContacts));
                 setAddContactForm({});
                 setAddingContact(false);
                 setSelectedId(data.contact.id);
@@ -692,7 +707,7 @@ export default function OutreachPage() {
                 setForwardError(data.error ?? 'Failed to create contact.');
                 return;
             }
-            setContacts(prev => [...prev, data.contact!].sort((a, b) => a.name.localeCompare(b.name)));
+            setContacts(prev => [...prev, data.contact!].sort(compareContacts));
             await forwardEmail(data.contact.id);
         } catch {
             setForwardError('Network error — could not reach the server.');
@@ -768,7 +783,7 @@ export default function OutreachPage() {
                     onSelectContact={selectContact}
                     onOpenResult={openSearchResult}
                     onNewContact={startAddContact}
-                    onRetry={fetchContacts}
+                    onRetry={retryContacts}
                     mobileOpen={sidebarOpen}
                     onCloseMobile={() => setSidebarOpen(false)}
                 />
@@ -845,7 +860,7 @@ export default function OutreachPage() {
                             <section>
                                 <div className="flex items-center justify-between mb-4">
                                     <h3 className="text-xs text-white/65 uppercase tracking-wider">
-                                        Email History {emails.length > 0 && <span className="text-white/45 normal-case tracking-normal">({emails.length})</span>}
+                                        Emails {emails.length > 0 && <span className="text-white/45 normal-case tracking-normal">({emails.length})</span>}
                                     </h3>
                                     {!addingEmail && !editContact && (
                                         <button onClick={startAddEmail} className={btnGold}>

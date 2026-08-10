@@ -1,5 +1,3 @@
-'use client';
-
 import type { EmailRecord } from '@/lib/types';
 
 export function ReplyPreview({ email, contactName, orgName }: { email: EmailRecord; contactName: string; orgName: string }) {

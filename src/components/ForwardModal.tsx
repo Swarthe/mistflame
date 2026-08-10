@@ -1,5 +1,3 @@
-'use client';
-
 import { useState } from 'react';
 import type { Contact } from '@/lib/types';
 import { fuzzyMatch, isValidEmail } from '@/lib/format';

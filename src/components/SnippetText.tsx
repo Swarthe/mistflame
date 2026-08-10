@@ -1,5 +1,3 @@
-'use client';
-
 // Must match HIT_OPEN/HIT_CLOSE in api/search/route.ts. Duplicated for the same
 // reason as isValidEmail: importing a route module into the client bundle to
 // share two characters is the worse trade.

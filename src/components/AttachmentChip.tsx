@@ -1,5 +1,3 @@
-'use client';
-
 import { formatSize } from '@/lib/format';
 
 // Chip for a stored attachment (href set, name downloads) or a pending file

@@ -1,5 +1,3 @@
-'use client';
-
 import { useEffect } from 'react';
 
 // Shared overlay + panel for the app's modals. Escape and a click on the

@@ -8,6 +8,8 @@ interface ContactRow {
     email: string;
     description: string | null;
     awaiting_reply: number;
+    last_activity: string | null;
+    has_draft: number;
 }
 
 interface TagRow {
@@ -17,6 +19,10 @@ interface TagRow {
     color: string;
 }
 
+// Ordered by last activity, most recent first. Drafts carry no timestamp, so
+// last_activity is NULL until a contact has sent or received something; DESC
+// puts those contacts last (SQLite sorts NULLs low), name breaks ties.
+// compareContacts in src/lib/format.ts mirrors this order client-side.
 const CONTACTS_QUERY = `
     SELECT
         c.id, c.name, c.email, c.description,
@@ -25,9 +31,16 @@ const CONTACTS_QUERY = `
             WHERE e.contact_id = c.id
               AND e.sender IS NULL
               AND NOT EXISTS (SELECT 1 FROM email child WHERE child.parent_id = e.id)
-        ) AS awaiting_reply
+        ) AS awaiting_reply,
+        (SELECT MAX(e.sent_at) FROM email e WHERE e.contact_id = c.id) AS last_activity,
+        EXISTS (
+            SELECT 1 FROM email e
+            WHERE e.contact_id = c.id
+              AND e.sent_at IS NULL
+              AND e.sender IS NOT NULL
+        ) AS has_draft
     FROM contact c
-    ORDER BY name
+    ORDER BY last_activity DESC, name
 `;
 
 async function attachTags(env: CloudflareEnv, contacts: ContactRow[]) {
@@ -113,6 +126,8 @@ export async function POST(request: Request) {
             description,
             tags: savedTags,
             awaiting_reply: 0,
+            last_activity: null,
+            has_draft: 0,
         },
     }, { status: 201 });
 }

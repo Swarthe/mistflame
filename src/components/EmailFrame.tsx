@@ -1,5 +1,3 @@
-'use client';
-
 import { useState, useEffect, useRef, type ReactNode } from 'react';
 
 /** Guards against an email whose own CSS inflates the document indefinitely. */

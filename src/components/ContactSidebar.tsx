@@ -1,5 +1,4 @@
-'use client';
-
+import { Pencil } from 'lucide-react';
 import type { Contact, SearchResult } from '@/lib/types';
 import { formatDateOnly } from '@/lib/format';
 import { TagChip } from '@/components/TagChip';
@@ -132,6 +131,16 @@ export function ContactSidebar({
                         <div className="flex items-center gap-2">
                             <div className="text-sm font-semibold text-white truncate">{c.name}</div>
                             {!!c.awaiting_reply && <span className="w-1.5 h-1.5 rounded-full bg-gold shrink-0" />}
+                            {!!c.has_draft && (
+                                <span title="Unsent draft" className="text-white/45 shrink-0">
+                                    <Pencil size={11} />
+                                </span>
+                            )}
+                            {c.last_activity && (
+                                <span className="ml-auto text-[10px] text-white/35 shrink-0">
+                                    {formatDateOnly(c.last_activity)}
+                                </span>
+                            )}
                         </div>
                         <div className="text-xs text-white/60 truncate mt-0.5">{c.email}</div>
                         {c.tags.length > 0 && (

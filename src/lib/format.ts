@@ -1,6 +1,20 @@
 // Pure helpers shared by the client components. Nothing here touches React
 // or the DOM.
 
+import type { Contact } from './types';
+
+// Sidebar order: most recent activity first, contacts with no dated mail
+// last, name as the tie-break. Mirrors the ORDER BY in the contacts query so
+// a locally inserted contact lands where the next refetch would put it.
+export function compareContacts(a: Contact, b: Contact): number {
+    if (a.last_activity !== b.last_activity) {
+        if (a.last_activity === null) return 1;
+        if (b.last_activity === null) return -1;
+        return a.last_activity < b.last_activity ? 1 : -1;
+    }
+    return a.name.localeCompare(b.name);
+}
+
 // Deliberately duplicated from api/contacts/route.ts rather than imported:
 // pulling a route module into the client bundle to share one regex is the
 // worse trade.

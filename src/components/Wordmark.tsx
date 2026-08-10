@@ -1,5 +1,3 @@
-'use client';
-
 // The "Mistflame — {org}" title shared by the app header and the login page.
 export function Wordmark({ orgName, className }: {
     orgName: string;

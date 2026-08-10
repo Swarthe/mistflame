@@ -59,7 +59,11 @@ CREATE TABLE email (
     FOREIGN KEY (parent_id) REFERENCES email (id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_email_contact ON email (contact_id);
+-- (contact_id, sent_at) rather than contact_id alone: the contacts query
+-- reads MAX(sent_at) per contact for its last-activity ordering, and the
+-- composite makes that a covering seek while still serving every plain
+-- contact_id lookup via its prefix.
+CREATE INDEX idx_email_contact_sent ON email (contact_id, sent_at);
 CREATE INDEX idx_email_parent ON email (parent_id);
 
 -- awaiting_reply tests, per contact, whether an inbound email has no children.
