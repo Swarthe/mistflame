@@ -2,7 +2,10 @@ CREATE TABLE contact (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     name           TEXT    NOT NULL,
     email          TEXT    NOT NULL UNIQUE,
-    description    TEXT
+    description    TEXT,
+    -- 1 = tucked into the sidebar's collapsed Archived section. Cleared by
+    -- the receiver when new inbound mail arrives from the contact.
+    archived       INTEGER NOT NULL DEFAULT 0
 );
 
 -- LOWER() defeats the UNIQUE index, so the receiver's case-insensitive lookup

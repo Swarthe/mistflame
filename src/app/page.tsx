@@ -436,6 +436,24 @@ export default function OutreachPage() {
         } finally { setSaving(false); }
     };
 
+    const setContactArchived = async (id: number, archived: boolean) => {
+        setApiError(null);
+        try {
+            const res = await apiFetch(`/api/contacts/${id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ archived }),
+            });
+            if (res.ok) {
+                setContacts(prev => prev.map(c => c.id === id ? { ...c, archived: archived ? 1 : 0 } : c));
+            } else {
+                setApiError(`The contact could not be ${archived ? 'archived' : 'unarchived'}.`);
+            }
+        } catch {
+            setApiError('Network error — could not reach the server.');
+        }
+    };
+
     const deleteContact = async (id: number) => {
         if (!confirm('Delete this contact and all their emails?')) return;
         setApiError(null);
@@ -831,6 +849,11 @@ export default function OutreachPage() {
                                                     >
                                                         {selectedContact.email}
                                                     </a>
+                                                    {!!selectedContact.archived && (
+                                                        <span className="text-[10px] uppercase tracking-wider text-white/45 border border-white/20 px-1.5 py-0.5">
+                                                            Archived
+                                                        </span>
+                                                    )}
                                                 </div>
                                                 {selectedContact.tags.length > 0 && (
                                                     <div className="flex flex-wrap gap-1.5 mt-2">
@@ -841,6 +864,12 @@ export default function OutreachPage() {
                                             <div className="flex items-center gap-2 flex-shrink-0">
                                                 <button onClick={() => setEditContact({ ...selectedContact })} className={btnGhost}>
                                                     Edit
+                                                </button>
+                                                <button
+                                                    onClick={() => setContactArchived(selectedContact.id, !selectedContact.archived)}
+                                                    className={btnGhost}
+                                                >
+                                                    {selectedContact.archived ? 'Unarchive' : 'Archive'}
                                                 </button>
                                                 <button
                                                     onClick={() => deleteContact(selectedContact.id)}

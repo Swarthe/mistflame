@@ -65,6 +65,32 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     return Response.json({ ok: true });
 }
 
+// Archive toggle. Deliberately not part of PUT: the header button flips one
+// flag and should not have to resend the contact's name, email and tags, and
+// ContactForm never touches the archived state.
+export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
+    const { id } = await params;
+    const contactId = parseInt(id, 10);
+    if (isNaN(contactId)) return Response.json({ ok: false, error: 'Invalid ID.' }, { status: 400 });
+
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    if (typeof body?.archived !== 'boolean') {
+        return Response.json({ ok: false, error: 'archived (boolean) is required.' }, { status: 400 });
+    }
+
+    const { env } = await getCloudflareContext({ async: true });
+    const result = await env.DB
+        .prepare('UPDATE contact SET archived = ? WHERE id = ?')
+        .bind(body.archived ? 1 : 0, contactId)
+        .run();
+
+    if (result.meta.changes === 0) {
+        return Response.json({ ok: false, error: 'Contact not found.' }, { status: 404 });
+    }
+
+    return Response.json({ ok: true });
+}
+
 export async function DELETE(_request: Request, { params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
     const contactId = parseInt(id, 10);

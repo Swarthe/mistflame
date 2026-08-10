@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pencil } from 'lucide-react';
 import type { Contact, SearchResult } from '@/lib/types';
 import { formatDateOnly } from '@/lib/format';
@@ -37,6 +38,44 @@ export function ContactSidebar({
     // The typed query drives the section layout; message search itself only
     // runs from 2 characters (searchActive), so at exactly 1 a hint shows.
     const searchMode = searchQuery.trim().length > 0;
+    // Archived contacts sit in a collapsed section at the bottom of the list.
+    // A search auto-expands it: hits hidden behind a closed toggle would read
+    // as no hits at all.
+    const [archivedOpen, setArchivedOpen] = useState(false);
+    const activeContacts = filteredContacts.filter(c => !c.archived);
+    const archivedContacts = filteredContacts.filter(c => c.archived);
+    const activeAll = contacts.filter(c => !c.archived);
+    const showArchivedList = archivedOpen || searchMode;
+
+    const contactRow = (c: Contact) => (
+        <button
+            key={c.id}
+            onClick={() => onSelectContact(c.id)}
+            className={`w-full text-left px-4 py-3.5 border-b border-white/10 transition-colors hover:bg-white/[0.07] cursor-pointer ${c.archived ? 'opacity-60' : ''} ${selectedId === c.id ? 'bg-white/[0.08] border-l-2 border-l-gold pl-[14px]' : ''}`}
+        >
+            <div className="flex items-center gap-2">
+                <div className="text-sm font-semibold text-white truncate">{c.name}</div>
+                {!!c.awaiting_reply && <span className="w-1.5 h-1.5 rounded-full bg-gold shrink-0" />}
+                {!!c.has_draft && (
+                    <span title="Unsent draft" className="text-white/45 shrink-0">
+                        <Pencil size={11} />
+                    </span>
+                )}
+                {c.last_activity && (
+                    <span className="ml-auto text-[10px] text-white/35 shrink-0">
+                        {formatDateOnly(c.last_activity)}
+                    </span>
+                )}
+            </div>
+            <div className="text-xs text-white/60 truncate mt-0.5">{c.email}</div>
+            {c.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                    {c.tags.map(t => <TagChip key={t.id} tag={t} />)}
+                </div>
+            )}
+        </button>
+    );
+
     return (
         <>
         {mobileOpen && (
@@ -48,15 +87,15 @@ export function ContactSidebar({
         <aside className={`w-72 max-w-[85vw] md:max-w-none flex-shrink-0 border-r border-white/20 flex-col min-h-0 bg-black max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 ${mobileOpen ? 'flex' : 'hidden md:flex'}`}>
             <div className="flex-shrink-0 flex items-center gap-2 px-4 h-11 border-b border-white/20">
                 <span className="text-xs text-white/65 uppercase tracking-wider">Contacts</span>
-                {!loading && contacts.length > 0 && (
+                {!loading && activeAll.length > 0 && (
                     <div className="flex items-center gap-1 text-xs text-white/40">
                         <span className="text-white/30">—</span>
-                        <span>{contacts.length}</span>
-                        {contacts.filter(c => c.awaiting_reply).length > 0 && (
+                        <span>{activeAll.length}</span>
+                        {activeAll.filter(c => c.awaiting_reply).length > 0 && (
                             <span className="flex items-center gap-0.5">
                                 <span>(</span>
                                 <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
-                                <span className="ml-0.5">{contacts.filter(c => c.awaiting_reply).length}</span>
+                                <span className="ml-0.5">{activeAll.filter(c => c.awaiting_reply).length}</span>
                                 <span>)</span>
                             </span>
                         )}
@@ -116,40 +155,26 @@ export function ContactSidebar({
                 )}
                 {searchMode && !loading && contacts.length > 0 && (
                     <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-white/40 border-b border-white/10">
-                        Contacts {filteredContacts.length > 0 && `· ${filteredContacts.length}`}
+                        Contacts {activeContacts.length > 0 && `· ${activeContacts.length}`}
                     </div>
                 )}
                 {searchMode && contacts.length > 0 && filteredContacts.length === 0 && (
                     <p className="text-xs text-white/40 px-4 py-3">No matching contacts</p>
                 )}
-                {filteredContacts.map(c => (
-                    <button
-                        key={c.id}
-                        onClick={() => onSelectContact(c.id)}
-                        className={`w-full text-left px-4 py-3.5 border-b border-white/10 transition-colors hover:bg-white/[0.07] cursor-pointer ${selectedId === c.id ? 'bg-white/[0.08] border-l-2 border-l-gold pl-[14px]' : ''}`}
-                    >
-                        <div className="flex items-center gap-2">
-                            <div className="text-sm font-semibold text-white truncate">{c.name}</div>
-                            {!!c.awaiting_reply && <span className="w-1.5 h-1.5 rounded-full bg-gold shrink-0" />}
-                            {!!c.has_draft && (
-                                <span title="Unsent draft" className="text-white/45 shrink-0">
-                                    <Pencil size={11} />
-                                </span>
-                            )}
-                            {c.last_activity && (
-                                <span className="ml-auto text-[10px] text-white/35 shrink-0">
-                                    {formatDateOnly(c.last_activity)}
-                                </span>
-                            )}
-                        </div>
-                        <div className="text-xs text-white/60 truncate mt-0.5">{c.email}</div>
-                        {c.tags.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mt-2">
-                                {c.tags.map(t => <TagChip key={t.id} tag={t} />)}
-                            </div>
-                        )}
-                    </button>
-                ))}
+                {activeContacts.map(contactRow)}
+
+                {archivedContacts.length > 0 && (
+                    <>
+                        <button
+                            onClick={() => setArchivedOpen(v => !v)}
+                            className="w-full flex items-center gap-1.5 px-4 py-2 text-[10px] uppercase tracking-wider text-white/40 hover:text-white/60 border-b border-white/10 transition-colors cursor-pointer"
+                        >
+                            <span className="text-white/30">{showArchivedList ? '▾' : '▸'}</span>
+                            <span>Archived · {archivedContacts.length}</span>
+                        </button>
+                        {showArchivedList && archivedContacts.map(contactRow)}
+                    </>
+                )}
 
                 {searchMode && (
                     <>

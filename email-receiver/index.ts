@@ -234,6 +234,21 @@ export default {
             if (!contact) return;
         }
 
+        // New mail revives an archived conversation: clear the flag so the
+        // contact reappears in the active list. Bounces count too, since a
+        // failed delivery is exactly the kind of thing archiving must not
+        // hide. The guard keeps this a no-op write for the common case, and
+        // the catch keeps a database predating migration 010 (no archived
+        // column) processing mail instead of erroring out here.
+        try {
+            await env.DB
+                .prepare('UPDATE contact SET archived = 0 WHERE id = ? AND archived = 1')
+                .bind(contact.id)
+                .run();
+        } catch (e) {
+            console.warn('unarchive skipped:', e);
+        }
+
         // 1. Match by In-Reply-To against stored message_id (set at send time)
         if (parentId === null && inReplyTo) {
             const parent = await env.DB

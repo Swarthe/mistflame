@@ -10,6 +10,7 @@ interface ContactRow {
     awaiting_reply: number;
     last_activity: string | null;
     has_draft: number;
+    archived: number;
 }
 
 interface TagRow {
@@ -25,7 +26,7 @@ interface TagRow {
 // compareContacts in src/lib/format.ts mirrors this order client-side.
 const CONTACTS_QUERY = `
     SELECT
-        c.id, c.name, c.email, c.description,
+        c.id, c.name, c.email, c.description, c.archived,
         EXISTS (
             SELECT 1 FROM email e
             WHERE e.contact_id = c.id
@@ -128,6 +129,7 @@ export async function POST(request: Request) {
             awaiting_reply: 0,
             last_activity: null,
             has_draft: 0,
+            archived: 0,
         },
     }, { status: 201 });
 }

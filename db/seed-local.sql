@@ -6,6 +6,11 @@ INSERT INTO contact (id, name, email) VALUES
     (1, 'Alice Nguyen',  'alice@example.com'),
     (2, 'Bob Tremblay',  'bob@example.com');
 
+-- An archived contact (migration 010): lands in the sidebar's collapsed
+-- Archived section, with the Unarchive button in the contact header.
+INSERT INTO contact (id, name, email, archived) VALUES
+    (3, 'Erik Winther',  'erik@example.org', 1);
+
 -- A colour-coded tag on Alice, so the sidebar chip and the contact header
 -- have something to show.
 INSERT INTO tag (id, name, color) VALUES (1, 'prospect', '#4fc3f7');
@@ -283,4 +288,27 @@ INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, bo
     'Anything works, but *plain text* or `markdown` is easiest for us.',
     'markdown',
     NULL, NULL
+);
+
+-- ── Thread 7 (Erik, archived): a finished conversation ─────────────────────────
+
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+    14, 3, NULL, NULL, '2026-04-02T08:30:00.000Z',
+    'Invoice 2026-014',
+    'Hi,
+
+Payment for invoice 2026-014 went out this morning. Thanks for the smooth collaboration.
+
+Erik',
+    'erik.done@example.org', 'hello@example.com'
+);
+
+INSERT INTO email (id, contact_id, parent_id, sender, sent_at, subject, body, message_id, recipient) VALUES (
+    15, 3, 14, 'hello@example.com', '2026-04-02T09:00:00.000Z',
+    'Re: Invoice 2026-014',
+    'Received, thank you Erik. All settled on our side too.
+
+Best,
+Mistflame',
+    'erik.done.reply@example.com', NULL
 );

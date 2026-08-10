@@ -24,6 +24,9 @@ export interface Contact {
     last_activity: string | null;
     /** 1 = the contact has an unsent draft. */
     has_draft: number;
+    /** 1 = tucked into the sidebar's collapsed Archived section. Cleared
+     *  by the receiver when new inbound mail arrives. */
+    archived: number;
 }
 
 export interface Attachment {

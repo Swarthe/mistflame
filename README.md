@@ -26,6 +26,9 @@ plan; everything else works on the free tier.
 - One search box covers everything: contacts and tags by fuzzy match, subjects
   and bodies by full text, with highlighted extracts that jump to the message
   in its thread
+- Finished conversations can be archived: the contact moves to a collapsed
+  section at the bottom of the sidebar, history intact, and resurfaces
+  automatically when new mail arrives from them
 
 **Sending**
 - Compose drafts in markdown, with a formatting toolbar, preview and
@@ -222,12 +225,14 @@ npx wrangler d1 execute mistflame-db --remote --file db/migrations/005-reply-hea
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/006-recipients.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/007-body-format.sql
 npx wrangler d1 execute mistflame-db --remote --file db/migrations/008-presence.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/009-contact-activity.sql
+npx wrangler d1 execute mistflame-db --remote --file db/migrations/010-contact-archive.sql
 ```
 
-002 to 004 and 008 use `IF NOT EXISTS` throughout and are safe to reapply, so
-an already current database is left alone. 001 and 005 to 007 are not: SQLite
-has no `ADD COLUMN IF NOT EXISTS`, so they error rather than doing nothing.
-Check whether they are needed with
+002 to 004, 008 and 009 use `IF NOT EXISTS` throughout and are safe to
+reapply, so an already current database is left alone. 001, 005 to 007 and 010
+are not: SQLite has no `ADD COLUMN IF NOT EXISTS`, so they error rather than
+doing nothing. Check whether they are needed with
 `npx wrangler d1 execute mistflame-db --remote --command "PRAGMA table_info(email)"`.
 
 Swap `--remote` for `--local` and the database name for the binding name `DB`
@@ -326,8 +331,6 @@ Contributions and feature requests are welcome. Not currently implemented:
 - **Follow-up reminders**: nothing resurfaces a contact whose last message is
   an unanswered outbound one; the awaiting-reply dot only covers mail that is
   waiting on you, not mail you are waiting on
-- **Contact archiving**: finished conversations cannot be archived or hidden,
-  only deleted along with their history
 - **Pagination**: long contact lists and email histories load in full
 - **Email templates / LLM integration**: no reusable draft templates or LLM
   support for reply generation
