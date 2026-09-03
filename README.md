@@ -58,6 +58,7 @@ plan; everything else works on the free tier.
 **Access**
 - Password-protected, with optional "Remember me" and any number of
   simultaneous sessions; the header notes when another session is active
+- Scoped, revocable bearer tokens for programs (see Security)
 
 See [Security](#security) for how HTML email, remote images and authentication
 are handled.
@@ -245,6 +246,11 @@ through `--command` rather than a file.
   guess cannot be distinguished by timing. Each login gets its own session
   token, so any number of sessions can be active at once; logging out ends
   only your own.
+- **Agent tokens**: programs get scoped bearer tokens instead of the password
+  (`read`, `read+draft`, `read+draft+send`), minted with
+  `node scripts/agent-token.mjs mint <principal> <scope>` and revoked one at a
+  time. Only a hash is stored; a token can never delete, edit contacts, or
+  send more than one named draft per request.
 - **HTML email**: inbound HTML is sanitised with DOMPurify and rendered in a
   sandboxed iframe with scripts disabled, so a sender's markup and stylesheet
   apply to their message and cannot reach the rest of the app. Your own

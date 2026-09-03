@@ -50,7 +50,7 @@ All vars are set in `wrangler.toml` (non-secret) or via `wrangler secret put` (p
 | Binding | Type | Worker | Purpose |
 |---|---|---|---|
 | `DB` | D1 Database | both | Contacts and email history |
-| `SESSION` | KV Namespace | main | Auth tokens (one `remember:<token>` key per active session) |
+| `SESSION` | KV Namespace | main | Auth tokens (one `remember:<token>` key per active session) and agent tokens (one `agent:<sha256 of token>` key per grant; see Authentication) |
 | `ATTACHMENTS` | R2 Bucket | both | Email attachments, including inline (`cid:`) parts of HTML bodies |
 | `EMAIL_SENDER` | Send Email | both | Outbound email via Cloudflare Email Workers |
 | `KV` | KV Namespace | email-receiver | Rate limit counters (can share the `SESSION` namespace) |
@@ -248,11 +248,20 @@ The `__remember` cookie (HttpOnly, SameSite=Strict) holds the token. When "Remem
 ### Middleware auth check
 Middleware reads `__remember` from the request, looks up `remember:<cookieValue>` in KV. If found → authenticated. If not → redirect to `/login` (or 401 for API routes). Visiting `/login` with a valid cookie redirects straight to `/`. One KV read per request, no session-creation side effects. KV is eventually consistent across edge locations, so a token created at one location can take up to a minute to become visible at another; the worst case is one spurious redirect to `/login` shortly after logging in from elsewhere.
 
+### Agent tokens (`Authorization: Bearer`)
+A second way in, for API callers that are programs rather than people. Middleware accepts `Authorization: Bearer <token>` on `/api/*` paths only, hashes the token (SHA-256) and looks up `agent:<hex>` in the SESSION namespace. The stored value is JSON, `{ principal, scope, minted }`; a missing, expired or malformed value is a 401. A token presented is the identity claimed: a cookie alongside it is ignored, and on a page route a bearer is simply not a login.
+
+Three scopes, least to most: `read`, `read+draft`, `read+draft+send`. What each allows is the `AGENT_ROUTES` table in `middleware.ts`, matched by method and path, so the route handlers stay unaware of agents. A route absent from the table is refused to every token whatever its scope: every DELETE, contact creation and editing (`POST /api/contacts`, `PUT`/`PATCH /api/contacts/[id]`), `/api/auth`, and the image proxy `/api/img` (an agent fetching remote images would fire tracking pixels on a sender's say-so). A scope refusal is a 403 whose body names the scope and the call, so a caller can tell "re-mint" (401) from "not allowed" (403).
+
+Middleware sets `x-mistflame-agent: <principal>` on the forwarded request for a bearer caller and strips that header for everyone else, so a route can tell an agent from a person. One route uses it: `POST /api/send-emails` with no `email_id` is send-all, which is the UI's button and never an agent's; the route returns 400 to an agent that omits the id. Presence in `/api/revision` keys on the cookie, so an agent polling it is not counted as a session.
+
+`scripts/agent-token.mjs` mints (`mint <principal> <scope> [--days N]`, default 180 days), lists and revokes (`revoke <principal | key prefix>`) through `wrangler kv key` against the remote namespace. The token is printed once and only its hash is stored, so a KV dump yields no usable credential and a lost token is re-minted rather than recovered. The person a token is for runs the mint; that is the consent, and one deleted key is its revocation. The middleware treats an expired key as no key, so expiry surfaces as 401 at the caller.
+
 ### Logout (`DELETE /api/auth`)
 Deletes `remember:<token>` from KV (only the caller's own session) and clears the `__remember` cookie. There is no "log out everywhere"; other sessions' tokens expire on their TTL.
 
 ### Dev mode
-When `DEV_MODE` is set, a hardcoded token (`dev-remember-token`) is used. KV is not read or written. The `Secure` flag is omitted from the cookie.
+When `DEV_MODE` is set, a hardcoded token (`dev-remember-token`) is used. KV is not read or written. The `Secure` flag is omitted from the cookie. The bearer path accepts `dev-agent-token` as a `read+draft+send` grant for principal `dev`, likewise without KV.
 
 ### Constants
 The `REMEMBER_COOKIE` constant is defined identically in both `middleware.ts` and `auth/route.ts`. This duplication is intentional (same reason as `isValidEmail`): middleware and API routes are different execution contexts and should not share imports.

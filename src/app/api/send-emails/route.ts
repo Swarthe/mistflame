@@ -215,6 +215,14 @@ export async function POST(request: Request) {
         return Response.json({ ok: false, error: 'Invalid email_id.' }, { status: 400 });
     }
 
+    // Send-all is the UI's button, never an agent's: a token with the send
+    // scope sends one named draft per request, so one confirmation on the
+    // agent's side can only ever mean one message. The header is set by
+    // middleware for bearer-token callers and stripped for everyone else.
+    if (emailId === null && request.headers.get('x-mistflame-agent') !== null) {
+        return Response.json({ ok: false, error: 'An agent token must name one email_id.' }, { status: 400 });
+    }
+
     const { env } = await getCloudflareContext({ async: true });
 
     const validAddrs = parseAddrList(env.SEND_ADDRS);
