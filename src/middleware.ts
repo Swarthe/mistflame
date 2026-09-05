@@ -24,11 +24,15 @@ const AGENT_HEADER = 'x-mistflame-agent';
 // Everything a token may call, by method and path, and the least scope that
 // allows it. A route absent from this table is refused to every token: that
 // covers deletes, contact edits, the login route and the image proxy, none
-// of which an agent has any business with.
+// of which an agent has any business with. Contact CREATION is allowed at
+// read+draft, because every message hangs under a contact and a draft to a
+// new correspondent is otherwise impossible; editing an existing contact
+// stays refused.
 const AGENT_ROUTES: { method: string; path: RegExp; scope: AgentScope }[] = [
     { method: 'GET', path: /^\/api\/(contacts|tags|search|revision|send-emails)$/, scope: 'read' },
     { method: 'GET', path: /^\/api\/contacts\/\d+\/emails$/, scope: 'read' },
     { method: 'GET', path: /^\/api\/contacts\/\d+\/emails\/\d+\/attachments\/\d+$/, scope: 'read' },
+    { method: 'POST', path: /^\/api\/contacts$/, scope: 'read+draft' },
     { method: 'POST', path: /^\/api\/contacts\/\d+\/emails$/, scope: 'read+draft' },
     { method: 'POST', path: /^\/api\/contacts\/\d+\/emails\/forward$/, scope: 'read+draft' },
     { method: 'PATCH', path: /^\/api\/contacts\/\d+\/emails\/\d+$/, scope: 'read+draft' },

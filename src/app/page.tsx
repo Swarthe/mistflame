@@ -33,6 +33,17 @@ export default function OutreachPage() {
     const [contacts, setContacts] = useState<Contact[]>([]);
     const [selectedId, setSelectedId] = useState<number | null>(() => {
         if (typeof window === 'undefined') return null;
+        // A link into one contact, `/?contact=<id>`, wins over the
+        // remembered selection: it is what an assistant's "review this
+        // draft" points at. Consumed once and dropped from the address
+        // bar, so a reload or a bookmark of the app itself falls back
+        // to the remembered contact like before.
+        const asked = new URLSearchParams(window.location.search).get('contact');
+        if (asked !== null) {
+            window.history.replaceState(null, '', window.location.pathname);
+            const wanted = parseInt(asked, 10);
+            if (!Number.isNaN(wanted) && wanted > 0) return wanted;
+        }
         const stored = localStorage.getItem('mf_contact');
         const parsed = stored ? parseInt(stored, 10) : NaN;
         // A corrupt stored value must not become a NaN id and fetch
